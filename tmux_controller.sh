@@ -42,6 +42,10 @@ wait_prompt() {
     local timeout="${2:-60}"
     
     check_session || return 1
+    if ! worker_exists "$target"; then
+        echo "Error: Target '$target' not found"
+        return 1
+    fi
     
     local start=$(date +%s)
     local last_screen=""
