@@ -1,187 +1,106 @@
 #!/bin/bash
 # Agent Teamwork - Comprehensive Test Suite
+# Usage: ./test_agent_teamwork.sh [-v]
 
 VERBOSE=false; [[ "$1" == "-v" ]] && VERBOSE=true
-PASS=0; FAIL=0
-TEST_SESSION="test-agent-session"
-export SESSION_NAME="$TEST_SESSION"
+PASS=0; FAIL=0; S="test-agent-session"
+export SESSION_NAME="$S"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+TC() { bash "$DIR/tmux_controller.sh" "$@"; }
+MG() { bash "$DIR/manager.sh" "$@"; }
 
-cleanup() { tmux kill-session -t "$TEST_SESSION" 2>/dev/null; }
-create_session() { tmux new-session -d -s "$TEST_SESSION" -n "Manager"; }
-
-assert() {
-  local desc="$1" expected="$2" actual="$3"
-  if [[ "$actual" == *"$expected"* ]]; then
-    echo "  ✓ $desc"; PASS=$((PASS+1))
-  else
-    echo "  ✗ $desc (expected: $expected, got: ${actual:0:60})"; FAIL=$((FAIL+1))
-  fi
+assert() { local d="$1" e="$2" a="$3"
+  if [[ "$a" == *"$e"* ]]; then echo "  ✓ $d"; PASS=$((PASS+1))
+  else echo "  ✗ $d (expected: $e, got: ${a:0:60})"; FAIL=$((FAIL+1)); fi
 }
-
-assert_exit() {
-  local desc="$1" exp="$2" act="$3"
-  if [ "$act" -eq "$exp" ]; then
-    echo "  ✓ $desc"; PASS=$((PASS+1))
-  else
-    echo "  ✗ $desc (exit: $act, expected: $exp)"; FAIL=$((FAIL+1))
-  fi
+assert_exit() { local d="$1" e="$2" a="$3"
+  if [ "$a" -eq "$e" ]; then echo "  ✓ $d"; PASS=$((PASS+1))
+  else echo "  ✗ $d (exit: $a, expected: $e)"; FAIL=$((FAIL+1)); fi
 }
-
 header() { echo -e "\n━━━ $1 ━━━"; }
+run() { echo -e "\n▶ $1"; shift; OUTPUT=$("$@" 2>&1); EXIT_CODE=$?; $VERBOSE && echo "  → $(echo "$OUTPUT" | head -3)"; }
 
-run() {
-  echo -e "\n▶ $1"; shift
-  OUTPUT=$("$@" 2>&1); EXIT_CODE=$?
-  $VERBOSE && echo "  → $OUTPUT"
-}
+tmux kill-session -t "$S" 2>/dev/null
+tmux new-session -d -s "$S" -n "Manager"
 
-# === SETUP ===
-header "A. SETUP & SESSION"
-cleanup
-run "A1: Create session" create_session
-assert "Session created" "Manager" "$OUTPUT"
-tmux has-session -t "$TEST_SESSION" 2>/dev/null
-assert_exit "A2: Session exists" 0 $?
+# === A: SETUP ===
+header "A. SETUP"
+tmux has-session -t "$S" 2>/dev/null; assert_exit "Session created" 0 $?
+run "SESSION_NAME env" bash -c 'echo "${SESSION_NAME:-unset}"'; assert "Env set" "$S" "$OUTPUT"
+tmux kill-session -t "$S" 2>/dev/null
+run "No session error" TC create X; assert "Error" "Session" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+tmux new-session -d -s "$S" -n "Manager"
 
-run "A3: SESSION_NAME env" bash -c 'echo "${SESSION_NAME:-unset}"'
-assert "SESSION_NAME set" "$TEST_SESSION" "$OUTPUT"
-
-cleanup
-run "A4: No session error" bash tmux_controller.sh create X
-assert "Error: Session not found" "Session" "$OUTPUT"
-assert_exit "Exit 1" 1 $EXIT_CODE
-create_session >/dev/null
-
-# === WORKER MANAGEMENT ===
+# === B: WORKER MANAGEMENT ===
 header "B. WORKER MANAGEMENT"
-run "B1: Create worker" bash tmux_controller.sh create Test-A
-assert "Created ✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "B1: Create worker" TC create Test-A; assert "✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "B2: Duplicate" TC create Test-A; assert "Error" "already exists" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "B3: Custom model" TC create Test-B opencode/mimo-v2.5-free; assert "Custom model" "mimo" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+for i in 1 2 3; do TC create "S-$i" >/dev/null 2>&1; done
+run "B4: Max workers" TC create S-4; assert "Max error" "Max workers" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "B5: Kill" TC kill Test-A; assert "✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "B6: Kill non-existent" TC kill NoWorker; assert "Error" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+for w in Test-B S-1 S-2 S-3; do TC kill "$w" >/dev/null 2>&1; done
 
-run "B2: Duplicate" bash tmux_controller.sh create Test-A
-assert "Error: exists" "already exists" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "B3: Custom model" bash tmux_controller.sh create Test-B opencode/mimo-v2.5-free
-assert "Custom model" "mimo-v2.5-free" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "B4: Max workers" bash -c '
-  for i in $(seq 1 5); do tmux_controller.sh create "S-$i"; done >/dev/null 2>&1
-  tmux_controller.sh create S-6
-'
-assert "Max workers error" "Max workers" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "B5: Kill" bash tmux_controller.sh kill Test-A
-assert "Killed ✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "B6: Kill non-existent" bash tmux_controller.sh kill NoWorker
-assert "Error: not found" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-# Cleanup B
-for w in Test-B S-1 S-2 S-3 S-4 S-5; do tmux_controller.sh kill "$w" >/dev/null 2>&1; done
-
-# === COMMAND SENDING ===
+# === C: COMMAND SENDING ===
 header "C. COMMAND SENDING"
-bash tmux_controller.sh create Send-Test >/dev/null 2>&1; sleep 1
+TC create Send-Test >/dev/null 2>&1
+run "C1: Send" TC send Send-Test "echo hello"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "C2: Multi-word" TC send Send-Test "echo hello world from worker"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "C3: Send non-existent" TC send NoWorker "ls"; assert "Error" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "C4: Read non-existent" TC read NoWorker; assert "Error" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "C5: Read screen" TC read Send-Test; assert_exit "Exit 0" 0 $EXIT_CODE
+run "C6: Smart send" TC smart Send-Test "echo smart-test-done" 10; assert_exit "Smart OK" 0 $EXIT_CODE
+run "C7: Wait non-existent" TC wait NoWorker 5; assert_exit "Wait err" 1 $EXIT_CODE
+TC kill Send-Test >/dev/null 2>&1
 
-run "C1: Send" bash tmux_controller.sh send Send-Test "echo hello"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "C2: Multi-word" bash tmux_controller.sh send Send-Test "echo hello world from worker"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "C3: Send non-existent" bash tmux_controller.sh send NoWorker "ls"
-assert "Error: not found" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "C4: Read non-existent" bash tmux_controller.sh read NoWorker
-assert "Error: not found" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "C5: Read screen" bash tmux_controller.sh read Send-Test
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "C6: Smart send" bash tmux_controller.sh smart Send-Test "echo smart-test-done" 10
-assert_exit "Smart OK" 0 $EXIT_CODE
-
-run "C7: Wait non-existent" bash tmux_controller.sh wait NoWorker 5
-assert_exit "Wait non-existent error" 1 $EXIT_CODE
-
-bash tmux_controller.sh kill Send-Test >/dev/null 2>&1
-
-# === DASHBOARD ===
+# === D: DASHBOARD ===
 header "D. DASHBOARD"
-bash tmux_controller.sh create Dash-A >/dev/null 2>&1
-bash tmux_controller.sh create Dash-B >/dev/null 2>&1
+TC create Dash-A >/dev/null 2>&1; TC create Dash-B >/dev/null 2>&1
+run "D1: Dashboard TC" TC dashboard
+assert "Header" "DASHBOARD" "$OUTPUT"; assert "A" "Dash-A" "$OUTPUT"; assert "B" "Dash-B" "$OUTPUT"
+assert "Uptime" "Uptime" "$OUTPUT"; assert "Year" "2026" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "D2: Dashboard MG" MG dashboard
+assert "Header" "DASHBOARD" "$OUTPUT"; assert "Workers" "Dash-" "$OUTPUT"; assert "Uptime" "uptime" "$OUTPUT"
+TC kill Dash-A >/dev/null 2>&1; TC kill Dash-B >/dev/null 2>&1
 
-run "D1: Dashboard tmux_controller" bash tmux_controller.sh dashboard
-assert "Has header" "DASHBOARD" "$OUTPUT"
-assert "Shows Dash-A" "Dash-A" "$OUTPUT"
-assert "Shows Dash-B" "Dash-B" "$OUTPUT"
-assert "Shows uptime" "Uptime" "$OUTPUT"
-assert "Shows year" "2026" "$OUTPUT"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "D2: Dashboard manager.sh" bash manager.sh dashboard
-assert "Header" "DASHBOARD" "$OUTPUT"
-assert "Shows workers" "Dash-" "$OUTPUT"
-assert "Uptime" "uptime" "$OUTPUT"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-bash tmux_controller.sh kill Dash-A >/dev/null 2>&1
-bash tmux_controller.sh kill Dash-B >/dev/null 2>&1
-
-# === MANAGER.SH ===
+# === E: MANAGER.SH ===
 header "E. MANAGER.SH"
-run "E1: manager create" bash manager.sh create M-Worker
-assert "Created ✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "E1: create" MG create M-Worker; assert "✓" "✓" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "E2: duplicate" MG create M-Worker; assert "Error" "already exists" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "E3: send" MG send M-Worker "ls"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "E4: send non-existent" MG send NoMan "ls"; assert "Error" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+run "E5: read non-existent" MG read NoMan; assert "Error" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
+MG create M-All1 >/dev/null 2>&1; MG create M-All2 >/dev/null 2>&1
+run "E6: send-all" MG send-all "echo hello-all"; assert_exit "Exit 0" 0 $EXIT_CODE
+for w in M-Worker M-All1 M-All2; do TC kill "$w" >/dev/null 2>&1; done
 
-run "E2: manager duplicate" bash manager.sh create M-Worker
-assert "Error: exists" "already exists" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "E3: manager send" bash manager.sh send M-Worker "ls"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-run "E4: manager send non-existent" bash manager.sh send NoMan "ls"
-assert "Error: not found" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-run "E5: manager read non-existent" bash manager.sh read NoMan
-assert "Error: not found" "not found" "$OUTPUT"; assert_exit "Exit 1" 1 $EXIT_CODE
-
-bash manager.sh create M-All1 >/dev/null 2>&1; bash manager.sh create M-All2 >/dev/null 2>&1
-run "E6: manager send-all" bash manager.sh send-all "echo hello-all"
-assert_exit "Exit 0" 0 $EXIT_CODE
-
-for w in M-Worker M-All1 M-All2; do tmux_controller.sh kill "$w" >/dev/null 2>&1; done
-
-# === CROSS-SCRIPT ===
+# === F: CROSS-SCRIPT ===
 header "F. CROSS-SCRIPT"
-bash tmux_controller.sh create Cross-W >/dev/null 2>&1
-run "F1: manager send to tmux worker" bash manager.sh send Cross-W "echo cross"
-assert_exit "Exit 0" 0 $EXIT_CODE
-run "F2: manager read tmux worker" bash manager.sh read Cross-W
-assert_exit "Exit 0" 0 $EXIT_CODE
-run "F3: manager dash" bash manager.sh dashboard
-assert "Shows Cross-W" "Cross-W" "$OUTPUT"
-bash tmux_controller.sh kill Cross-W >/dev/null 2>&1
+TC create Cross-W >/dev/null 2>&1
+run "F1: MG send to TC worker" MG send Cross-W "echo cross"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "F2: MG read TC worker" MG read Cross-W; assert_exit "Exit 0" 0 $EXIT_CODE
+run "F3: MG dash" MG dashboard; assert "Shows Cross-W" "Cross-W" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+TC kill Cross-W >/dev/null 2>&1
+MG create Rev-W >/dev/null 2>&1
+run "F4: TC send to MG worker" TC send Rev-W "echo rev"; assert_exit "Exit 0" 0 $EXIT_CODE
+run "F5: TC read MG worker" TC read Rev-W; assert_exit "Exit 0" 0 $EXIT_CODE
+run "F6: TC dash" TC dashboard; assert "Shows Rev-W" "Rev-W" "$OUTPUT"; assert_exit "Exit 0" 0 $EXIT_CODE
+TC kill Rev-W >/dev/null 2>&1
 
-bash manager.sh create Rev-W >/dev/null 2>&1
-run "F4: tmux send to manager worker" bash tmux_controller.sh send Rev-W "echo rev"
-assert_exit "Exit 0" 0 $EXIT_CODE
-run "F5: tmux read manager worker" bash tmux_controller.sh read Rev-W
-assert_exit "Exit 0" 0 $EXIT_CODE
-run "F6: tmux dash" bash tmux_controller.sh dashboard
-assert "Shows Rev-W" "Rev-W" "$OUTPUT"
-bash tmux_controller.sh kill Rev-W >/dev/null 2>&1
-
-# === HELP ===
+# === G: HELP ===
 header "G. HELP"
-run "G1: tmux help" bash tmux_controller.sh; assert "USAGE" "USAGE" "$OUTPUT"
-run "G2: manager help" bash manager.sh; assert "USAGE" "USAGE" "$OUTPUT"
+run "G1: TC help" TC; assert "USAGE" "USAGE" "$OUTPUT"
+run "G2: MG help" MG; assert "USAGE" "USAGE" "$OUTPUT"
 
-# === CLEANUP ===
+# === H: CLEANUP ===
 header "H. CLEANUP"
-run "H1: All workers cleaned" tmux list-windows -t "$TEST_SESSION" -F '#{window_name}' 2>/dev/null | grep -v "Manager"
-if [ -z "$OUTPUT" ]; then echo "  ✓ H1: Only Manager remains"; PASS=$((PASS+1))
-else echo "  ✗ H1: Extra windows: $OUTPUT"; FAIL=$((FAIL+1)); fi
-
-cleanup; echo "  ✓ Test session cleaned"; PASS=$((PASS+1))
+echo -e "\n▶ H1: Check remaining"
+REMAINING=$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -vc "Manager")
+echo "  Non-Manager windows: $REMAINING"
+if [ "$REMAINING" -eq 0 ]; then echo "  ✓ H1: Only Manager remains"; PASS=$((PASS+1))
+else echo "  ✗ H1: Leftovers: $(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -v Manager | tr '\n' ' ')"; FAIL=$((FAIL+1)); fi
+tmux kill-session -t "$S" 2>/dev/null; echo "  ✓ Cleaned up"; PASS=$((PASS+1))
 
 # === RESULTS ===
 echo -e "\n═══════ RESULTS ═══════"
