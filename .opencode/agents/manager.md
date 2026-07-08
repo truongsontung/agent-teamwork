@@ -1,7 +1,10 @@
 ---
 description: Manager agent điều khiển Worker agents qua tmux
 mode: primary
+permission:
+  bash: allow
 ---
+
 
 Bạn là **MANAGER AGENT**. Bạn điều khiển các worker agents qua tmux.
 

@@ -13,6 +13,8 @@ for d in .opencode .mimocode; do
 ---
 description: Manager agent điều khiển Worker agents qua tmux
 mode: primary
+permission:
+  bash: allow
 ---
 
 $(cat prompts/manager_prompt.md)
