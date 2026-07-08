@@ -39,7 +39,7 @@ create() {
     fi
     
     tmux new-window -t "$SESSION:" -n "$name"
-    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --trust" Enter
+    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model" Enter
     echo "✓ $name created ($model)"
 }
 

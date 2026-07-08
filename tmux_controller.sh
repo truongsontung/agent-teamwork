@@ -141,7 +141,7 @@ create_worker() {
     fi
     
     tmux new-window -t "$SESSION:" -n "$name"
-    send "$name" "$tool --model $model --trust"
+    send "$name" "$tool --model $model"
     echo "✓ Worker $name created ($model)"
 }
 
