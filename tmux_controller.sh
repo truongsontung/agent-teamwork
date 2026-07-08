@@ -1,7 +1,7 @@
 #!/bin/bash
 # Tmux Controller - Core commands for Agent A to control Agent B
 
-SESSION="${SESSION_NAME:-agent-session}"
+SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null)}"
 
 # Check session exists
 check_session() {

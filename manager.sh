@@ -1,7 +1,7 @@
 #!/bin/bash
 # Manager Agent - Control multiple workers
 
-SESSION="${SESSION_NAME:-agent-session}"
+SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null)}"
 CONFIG="config.json"
 MAX_WORKERS=$(jq -r '.max_workers // 5' "$CONFIG" 2>/dev/null)
 DEFAULT_MODEL=$(jq -r '.workers.default_model // "opencode/deepseek-v4-flash-free"' "$CONFIG" 2>/dev/null)
