@@ -11,15 +11,22 @@ export SESSION_NAME="$SESSION"
 MANAGER_TOOL=$(jq -r '.manager.tool // "opencode"' "$CONFIG" 2>/dev/null)
 MANAGER_CMD="$MANAGER_TOOL --model $MANAGER_MODEL --agent manager"
 
+# Copy agent config for both opencode and mimo
+for d in .opencode .mimocode; do
+    mkdir -p "$d/agents"
+    [ -f "$d/agents/manager.md" ] || cp .opencode/agents/manager.md "$d/agents/manager.md"
+done
+
 SETUP_CMD="cd $(pwd) && export SESSION_NAME=$SESSION && echo '--- Launching Manager...' && $MANAGER_CMD"
 
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-    # Session exists: add Manager window
-    tmux new-window -t "$SESSION" -n "Manager"
-    tmux send-keys -t "$SESSION:Manager" "$SETUP_CMD" Enter
-    echo "✓ Manager window added to session '$SESSION'"
+if [ -n "$TMUX" ]; then
+    # Inside tmux → create Manager window in current session
+    tmux new-window -n "Manager"
+    tmux send-keys -t "Manager" "$SETUP_CMD" Enter
+    echo "✓ Manager window created in current session"
 else
-    # Create new detached session (persists after SSH disconnect)
+    # Outside tmux → create detached session
+    tmux kill-session -t "$SESSION" 2>/dev/null
     tmux new-session -d -s "$SESSION" -n "Manager" -x 150 -y 40
     tmux send-keys -t "$SESSION:Manager" "$SETUP_CMD" Enter
     echo "✓ Agent Teamwork ready!"
