@@ -9,7 +9,7 @@ export SESSION_NAME="$SESSION"
 # Copy latest agent config to both tool dirs
 for d in .opencode .mimocode; do
     mkdir -p "$d/agents"
-    cp .opencode/agents/manager.md "$d/agents/manager.md"
+    [ "$d" = ".opencode" ] || cp .opencode/agents/manager.md "$d/agents/manager.md"
 done
 
 # Kill old Manager window if exists, then create new
