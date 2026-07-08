@@ -91,7 +91,7 @@ create_worker() {
     
     # Check max workers
     local max=$(jq -r '.max_workers' config.json 2>/dev/null || echo 5)
-    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -c "Worker" 2>/dev/null || echo "0")
+    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -c "Worker" 2>/dev/null || true)
     if [ "$current" -ge "$max" ]; then
         echo "Error: Max workers ($max) reached"
         return 1
