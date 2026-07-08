@@ -6,18 +6,26 @@ TOOL=$(jq -r '.manager.tool // "opencode"' "$CONFIG")
 
 export SESSION_NAME="$SESSION"
 
-# Generate project config with auto permissions
-PERM_JSON=$(jq '.manager.permission // {}' "$CONFIG")
 for d in .opencode .mimocode; do
     mkdir -p "$d/agents"
-    # Project-level config: auto-approve permissions
-    cat > "$d/opencode.json" << EOF
+
+    # Project-level: auto-approve for ALL agents (Manager + Workers)
+    cat > "$d/opencode.json" << 'EOF'
 {
-  "\$schema": "https://opencode.ai/config.json",
-  "permission": $PERM_JSON
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "task": "allow",
+    "question": "allow",
+    "websearch": "allow"
+  }
 }
 EOF
-    # Agent file: frontmatter from config + prompt body
+
+    # Agent-specific: Manager (edit:deny vì chỉ dùng tmux điều khiển)
     {
         echo "---"
         echo "description: Manager agent điều khiển Worker agents qua tmux"

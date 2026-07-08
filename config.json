@@ -4,7 +4,6 @@
   "manager": {
     "tool": "mimo",
     "model": "mimo/mimo-auto",
-    "auto_trust": true,
     "permission": {
       "bash": "allow",
       "edit": "deny",

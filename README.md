@@ -32,9 +32,14 @@ agent-teamwork/
 ├── setup.sh                 ← Khởi tạo session
 ├── tmux_controller.sh       ← Điều khiển workers qua tmux
 ├── manager.sh               ← Script quản lý workers (cùng API)
-├── .opencode/
+├── .opencode/               ← Config cho opencode (auto-generate)
+│   ├── opencode.json        ← Project-level permissions
 │   └── agents/
-│       └── manager.md       ← Agent definition (system prompt cho Manager)
+│       └── manager.md       ← Agent definition + Manager system prompt
+├── .mimocode/               ← Config cho mimo (auto-generate)
+│   ├── opencode.json
+│   └── agents/
+│       └── manager.md
 ├── prompts/
 │   └── manager_prompt.md    ← Prompt gốc (reference)
 ├── test_agent_teamwork.sh   ← Test suite
@@ -49,30 +54,48 @@ Hai script cung cấp cùng chức năng, có thể dùng thay thế lẫn nhau.
 
 ```json
 {
-  "session_name": "agent-session",
   "max_workers": 5,
   "manager": {
     "tool": "mimo",
-    "model": "mimo/mimo-auto"
+    "model": "mimo/mimo-auto",
+    "permission": {
+      "bash": "allow",
+      "edit": "deny",
+      "read": "allow",
+      "glob": "allow",
+      "grep": "allow",
+      "task": "allow",
+      "question": "allow",
+      "websearch": "allow"
+    }
   },
   "workers": {
+    "tool": "opencode",
     "default_model": "opencode/deepseek-v4-flash-free",
-    "available_models": [
-      "opencode/deepseek-v4-flash-free",
-      "opencode/mimo-v2.5-free",
-      "opencode/gpt-5.5",
-      "opencode/claude-opus-4-8"
-    ]
+    "available_models": [...]
   }
 }
 ```
 
 | Field | Mô tả |
 |-------|-------|
-| `session_name` | Tên tmux session (mặc định: `agent-session`) |
 | `max_workers` | Số worker tối đa |
-| `manager.tool` | Tool launch Manager (`opencode` hoặc `mimo`) |
+| `manager.tool` | Tool launch Manager (`opencode` hoặc `mimo`, mặc định: `opencode`) |
 | `manager.model` | Model cho Manager agent |
+| `manager.permission` | Permission cho Manager agent (allow/ask/deny) |
+| `workers.tool` | Tool launch Worker (mặc định: `opencode`) |
+| `workers.default_model` | Model mặc định khi tạo worker |
+
+### Cơ chế Permission
+
+`setup.sh` generate 2 tầng config:
+
+| Tầng | File | Áp dụng |
+|------|------|---------|
+| **Project** | `.opencode/opencode.json` `.mimocode/opencode.json` | Tất cả agent (Manager + Worker) — `bash: allow`, `read: allow`, ... |
+| **Agent** | `.opencode/agents/manager.md` `.mimocode/agents/manager.md` | Chỉ Manager — ghi đè `edit: deny` từ config.json |
+
+Worker không bị `edit: deny`, tự do sửa file. Manager không cần edit (dùng tmux).
 | `workers.default_model` | Model mặc định khi tạo worker mới |
 
 ## API
