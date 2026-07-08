@@ -1,0 +1,25 @@
+{
+  "session_name": "dual-opencode",
+  "agents": {
+    "A": {
+      "name": "Planner",
+      "role": "supervisor",
+      "tool": "opencode",
+      "model": "opencode/gpt-5.5",
+      "mode": "plan",
+      "description": "Lên kế hoạch"
+    },
+    "B": {
+      "name": "Builder",
+      "role": "executor",
+      "tool": "opencode",
+      "model": "opencode/claude-opus-4-8",
+      "mode": "build",
+      "description": "Thực thi"
+    }
+  },
+  "communication": {
+    "a_to_b": "shared/messages/a_to_b.txt",
+    "b_to_a": "shared/messages/b_to_a.txt"
+  }
+}
