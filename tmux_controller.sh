@@ -36,35 +36,48 @@ read_screen() {
     tmux capture-pane -t "$SESSION:$target" -p 2>/dev/null
 }
 
-# Wait for prompt using pane-output-change hook
+# Wait for command completion (works with both shell and opencode TUI)
 wait_prompt() {
     local target="$1"
     local timeout="${2:-60}"
     
     check_session || return 1
     
-    # Use tmux wait-for with activity monitoring
     local start=$(date +%s)
-    local hook="wait-$target-$$"
+    local last_screen=""
+    local stable_count=0
     
-    # Set up activity hook
-    tmux set-hook -t "$SESSION:$target" pane-output-change "run-shell 'tmux signal-activity $hook'" 2>/dev/null
-    
-    # Wait with timeout
     while true; do
         local screen=$(read_screen "$target")
+        
+        # Check if screen is stable (no changes for 2 seconds)
+        if [ "$screen" = "$last_screen" ]; then
+            stable_count=$((stable_count + 1))
+            if [ "$stable_count" -ge 4 ]; then
+                # Screen stable for 2 seconds - likely done
+                return 0
+            fi
+        else
+            stable_count=0
+            last_screen="$screen"
+        fi
+        
+        # Check for shell prompt
         if echo "$screen" | grep -qE '[\$≥]\s*$'; then
-            tmux set-hook -t "$SESSION:$target" pane-output-change 2>/dev/null
+            return 0
+        fi
+        
+        # Check for opencode idle indicators
+        if echo "$screen" | grep -qiE 'ready|waiting for input|>.*_'; then
             return 0
         fi
         
         local now=$(date +%s)
         if [ $((now - start)) -ge $timeout ]; then
-            tmux set-hook -t "$SESSION:$target" pane-output-change 2>/dev/null
             return 1
         fi
         
-        sleep 0.2
+        sleep 0.5
     done
 }
 
@@ -97,9 +110,9 @@ create_worker() {
         return 1
     fi
     
-    # Check max workers
+    # Check max workers (count all windows except Manager)
     local max=$(jq -r '.max_workers' config.json 2>/dev/null || echo 5)
-    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -c "Worker" 2>/dev/null || true)
+    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -v "Manager" | wc -l | tr -d ' ')
     if [ "$current" -ge "$max" ]; then
         echo "Error: Max workers ($max) reached"
         return 1

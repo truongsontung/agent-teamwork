@@ -31,7 +31,7 @@ create() {
         return 1
     fi
     
-    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -c "Worker" 2>/dev/null || true)
+    local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -v "Manager" | wc -l | tr -d ' ')
     if [ "$current" -ge "$MAX_WORKERS" ]; then
         echo "Error: Max workers ($MAX_WORKERS) reached"
         return 1
