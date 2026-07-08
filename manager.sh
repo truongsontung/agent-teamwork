@@ -5,6 +5,7 @@ SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null
 CONFIG="config.json"
 MAX_WORKERS=$(jq -r '.max_workers // 5' "$CONFIG" 2>/dev/null)
 DEFAULT_MODEL=$(jq -r '.workers.default_model // "opencode/deepseek-v4-flash-free"' "$CONFIG" 2>/dev/null)
+DEFAULT_TOOL=$(jq -r '.workers.tool // "opencode"' "$CONFIG" 2>/dev/null)
 
 # Check session
 check_session() {
@@ -38,7 +39,7 @@ create() {
     fi
     
     tmux new-window -t "$SESSION" -n "$name"
-    tmux send-keys -t "$SESSION:$name" "opencode --model $model" Enter
+    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --trust" Enter
     echo "✓ $name created ($model)"
 }
 

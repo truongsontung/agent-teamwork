@@ -122,6 +122,7 @@ worker_exists() {
 create_worker() {
     local name="$1"
     local model="${2:-$(jq -r '.workers.default_model' config.json 2>/dev/null || echo 'opencode/deepseek-v4-flash-free')}"
+    local tool=$(jq -r '.workers.tool // "opencode"' config.json 2>/dev/null)
     
     check_session || return 1
     
@@ -140,7 +141,7 @@ create_worker() {
     fi
     
     tmux new-window -t "$SESSION" -n "$name"
-    send "$name" "opencode --model $model --trust"
+    send "$name" "$tool --model $model --trust"
     echo "✓ Worker $name created ($model)"
 }
 
