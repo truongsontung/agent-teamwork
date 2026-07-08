@@ -140,7 +140,7 @@ create_worker() {
     fi
     
     tmux new-window -t "$SESSION" -n "$name"
-    send "$name" "opencode --model $model"
+    send "$name" "opencode --model $model --trust"
     echo "✓ Worker $name created ($model)"
 }
 
