@@ -18,6 +18,10 @@ send() {
     local keys="$*"
     
     check_session || return 1
+    if ! worker_exists "$target"; then
+        echo "Error: Target '$target' not found"
+        return 1
+    fi
     tmux send-keys -t "$SESSION:$target" "$keys" Enter
 }
 
@@ -25,6 +29,10 @@ send() {
 read_screen() {
     local target="$1"
     check_session || return 1
+    if ! worker_exists "$target"; then
+        echo "Error: Target '$target' not found"
+        return 1
+    fi
     tmux capture-pane -t "$SESSION:$target" -p 2>/dev/null
 }
 
@@ -135,7 +143,7 @@ dashboard() {
         fi
         
         # Get last command from screen
-        local last_cmd=$(tmux capture-pane -t "$SESSION:$name" -p 2>/dev/null | grep -E '[\$≥]' | tail -1 | sed 's/.*[\$≥] //')
+        local last_cmd=$(tmux capture-pane -t "$SESSION:$name" -p 2>/dev/null | grep -E '[\$≥]' | tail -1 | sed 's/.*[\$≥] //' | tr -d '\n' | head -c 50)
         
         echo "║  $name"
         echo "║    Uptime: ${uptime:-N/A}"
