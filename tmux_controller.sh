@@ -36,7 +36,7 @@ read_screen() {
     tmux capture-pane -t "$SESSION:$target" -p 2>/dev/null
 }
 
-# Wait for command completion (works with both shell and opencode TUI)
+# Wait for command completion (shell + opencode TUI)
 wait_prompt() {
     local target="$1"
     local timeout="${2:-60}"
@@ -54,16 +54,28 @@ wait_prompt() {
     while true; do
         local screen=$(read_screen "$target")
         
-        # Check if screen is stable (no changes for 2 seconds)
-        if [ "$screen" = "$last_screen" ]; then
-            stable_count=$((stable_count + 1))
-            if [ "$stable_count" -ge 4 ]; then
-                # Screen stable for 2 seconds - likely done
-                return 0
-            fi
-        else
-            stable_count=0
-            last_screen="$screen"
+        # Auto-handle permission prompts
+        if echo "$screen" | grep -q "Permission required"; then
+            tmux send-keys -t "$SESSION:$target" Enter
+            sleep 1; continue
+        fi
+        
+        # Auto-confirm "Always allow"
+        if echo "$screen" | grep -q "Always allow"; then
+            tmux send-keys -t "$SESSION:$target" Enter
+            sleep 0.5; continue
+        fi
+        
+        # Auto-handle "Ask" questions: notify user
+        if echo "$screen" | grep -qE '△\s*(Ask|Confirm|Question)'; then
+            echo "! Worker '$target' needs input (ask/confirm)"
+            echo "! $(echo "$screen" | grep -oP '.{0,50}(Ask|Confirm|Question).{0,50}')"
+            return 2
+        fi
+        
+        # Check for opencode idle state (ctrl+p hint = idle)
+        if echo "$screen" | grep -qi "ctrl+p commands"; then
+            return 0
         fi
         
         # Check for shell prompt
@@ -71,13 +83,20 @@ wait_prompt() {
             return 0
         fi
         
-        # Check for opencode idle indicators
-        if echo "$screen" | grep -qiE 'ready|waiting for input|>.*_'; then
-            return 0
+        # Stability detection (fallback)
+        if [ "$screen" = "$last_screen" ]; then
+            stable_count=$((stable_count + 1))
+            if [ "$stable_count" -ge 4 ]; then
+                return 0
+            fi
+        else
+            stable_count=0
+            last_screen="$screen"
         fi
         
         local now=$(date +%s)
         if [ $((now - start)) -ge $timeout ]; then
+            echo "! Timeout waiting for '$target'"
             return 1
         fi
         
@@ -251,12 +270,22 @@ Tmux Controller
 USAGE:
   $0 send <target> <command>     Send command (multi-word)
   $0 read <target>               Read screen
-  $0 wait <target> [timeout]     Wait for prompt
-  $0 smart <target> <command>    Send + wait
+  $0 wait <target> [timeout]     Wait for completion (exit: 0=done, 1=timeout, 2=needs input)
+  $0 smart <target> <command>    Send + wait (auto-handles permission/allow dialogs)
   $0 create <name> [model]       Create worker
   $0 kill <name>                 Kill worker
   $0 dashboard                   Show all agents
   $0 interactive                 Interactive mode
+
+EXIT CODES (wait/smart):
+  0 = Worker finished (idle)
+  1 = Timeout
+  2 = Worker needs user input (ask/confirm)
+
+AUTO-HANDLED EVENTS:
+  - Permission required → auto-allow once
+  - Always allow → auto-confirm
+  - Other dialogs → return exit 2, user must respond
 
 EXAMPLES:
   $0 send Worker-1 npm install

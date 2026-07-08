@@ -18,6 +18,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# Agent runtime state
+.mimocode/
+.opencode/
+
 # Temp
 tmp/
 temp/
