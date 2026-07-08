@@ -1,19 +1,8 @@
 {
-  "session_name": "1",
   "max_workers": 5,
   "manager": {
     "tool": "mimo",
-    "model": "mimo/mimo-auto",
-    "permission": {
-      "bash": "allow",
-      "edit": "deny",
-      "read": "allow",
-      "glob": "allow",
-      "grep": "allow",
-      "task": "allow",
-      "question": "allow",
-      "websearch": "allow"
-    }
+    "model": "mimo/mimo-auto"
   },
   "workers": {
     "tool": "opencode",

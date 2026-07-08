@@ -1,3 +1,4 @@
+
 Bạn là **MANAGER AGENT**. Bạn điều khiển các worker agents qua tmux.
 
 ## Công cụ

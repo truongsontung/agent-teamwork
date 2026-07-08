@@ -6,36 +6,17 @@ TOOL=$(jq -r '.manager.tool // "opencode"' "$CONFIG")
 
 export SESSION_NAME="$SESSION"
 
+# Generate agent definition for Manager
 for d in .opencode .mimocode; do
     mkdir -p "$d/agents"
+    cat > "$d/agents/manager.md" << EOF
+---
+description: Manager agent điều khiển Worker agents qua tmux
+mode: primary
+---
 
-    # Project-level: auto-approve for ALL agents (Manager + Workers)
-    cat > "$d/opencode.json" << 'EOF'
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "bash": "allow",
-    "read": "allow",
-    "glob": "allow",
-    "grep": "allow",
-    "task": "allow",
-    "question": "allow",
-    "websearch": "allow"
-  }
-}
+$(cat prompts/manager_prompt.md)
 EOF
-
-    # Agent-specific: Manager (edit:deny vì chỉ dùng tmux điều khiển)
-    {
-        echo "---"
-        echo "description: Manager agent điều khiển Worker agents qua tmux"
-        echo "mode: primary"
-        echo "permission:"
-        jq -r '.manager.permission // {} | to_entries[] | "  \(.key): \(.value)"' "$CONFIG"
-        echo "---"
-        echo ""
-        cat prompts/manager_prompt.md
-    } > "$d/agents/manager.md"
 done
 
 tmux kill-window -t "Manager" 2>/dev/null

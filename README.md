@@ -32,14 +32,10 @@ agent-teamwork/
 ├── setup.sh                 ← Khởi tạo session
 ├── tmux_controller.sh       ← Điều khiển workers qua tmux
 ├── manager.sh               ← Script quản lý workers (cùng API)
-├── .opencode/               ← Config cho opencode (auto-generate)
-│   ├── opencode.json        ← Project-level permissions
+├── .opencode/               ← Agent config (auto-generate)
 │   └── agents/
-│       └── manager.md       ← Agent definition + Manager system prompt
-├── .mimocode/               ← Config cho mimo (auto-generate)
-│   ├── opencode.json
-│   └── agents/
-│       └── manager.md
+│       └── manager.md       ← Manager system prompt
+├── .mimocode/               ← Agent config cho mimo (auto-generate)
 ├── prompts/
 │   └── manager_prompt.md    ← Prompt gốc (reference)
 ├── test_agent_teamwork.sh   ← Test suite
@@ -80,22 +76,17 @@ Hai script cung cấp cùng chức năng, có thể dùng thay thế lẫn nhau.
 | Field | Mô tả |
 |-------|-------|
 | `max_workers` | Số worker tối đa |
-| `manager.tool` | Tool launch Manager (`opencode` hoặc `mimo`, mặc định: `opencode`) |
+| `manager.tool` | Tool launch Manager (`opencode` hoặc `mimo`) |
 | `manager.model` | Model cho Manager agent |
-| `manager.permission` | Permission cho Manager agent (allow/ask/deny) |
 | `workers.tool` | Tool launch Worker (mặc định: `opencode`) |
 | `workers.default_model` | Model mặc định khi tạo worker |
 
-### Cơ chế Permission
+### Cách hoạt động
 
-`setup.sh` generate 2 tầng config:
-
-| Tầng | File | Áp dụng |
-|------|------|---------|
-| **Project** | `.opencode/opencode.json` `.mimocode/opencode.json` | Tất cả agent (Manager + Worker) — `bash: allow`, `read: allow`, ... |
-| **Agent** | `.opencode/agents/manager.md` `.mimocode/agents/manager.md` | Chỉ Manager — ghi đè `edit: deny` từ config.json |
-
-Worker không bị `edit: deny`, tự do sửa file. Manager không cần edit (dùng tmux).
+- **Manager** dùng `--agent manager`, load system prompt từ file agent → biết vai trò điều khiển worker qua tmux
+- **Worker** chạy với config mặc định của opencode/mimo, Manager giám sát qua `./tmux_controller.sh`
+- Mọi lệnh do Manager quyết định và gửi qua tmux, worker tự xử lý permission theo default
+- Sửa `tool`/`model` trong config.json → `./setup.sh` lại
 | `workers.default_model` | Model mặc định khi tạo worker mới |
 
 ## API
