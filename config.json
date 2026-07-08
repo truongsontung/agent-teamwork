@@ -3,7 +3,18 @@
   "max_workers": 5,
   "manager": {
     "tool": "mimo",
-    "model": "mimo/mimo-auto"
+    "model": "mimo/mimo-auto",
+    "auto_trust": true,
+    "permission": {
+      "bash": "allow",
+      "edit": "deny",
+      "read": "allow",
+      "glob": "allow",
+      "grep": "allow",
+      "task": "allow",
+      "question": "allow",
+      "websearch": "allow"
+    }
   },
   "workers": {
     "default_model": "opencode/deepseek-v4-flash-free",
