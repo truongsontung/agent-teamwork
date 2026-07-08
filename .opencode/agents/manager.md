@@ -2,24 +2,14 @@
 description: Manager agent điều khiển Worker agents qua tmux
 mode: primary
 permission:
-  bash:
-    "*": allow
-  read:
-    "*": allow
-  edit:
-    "*": allow
-  write:
-    "*": allow
-  glob:
-    "*": allow
-  grep:
-    "*": allow
-  task:
-    "*": allow
-  websearch:
-    "*": allow
-  webfetch:
-    "*": allow
+  bash: allow
+  read: allow
+  edit: allow
+  glob: allow
+  grep: allow
+  task: allow
+  websearch: allow
+  webfetch: allow
 ---
 
 
