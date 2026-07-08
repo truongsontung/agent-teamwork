@@ -20,10 +20,12 @@ done
 SETUP_CMD="cd $(pwd) && export SESSION_NAME=$SESSION && echo '--- Launching Manager...' && $MANAGER_CMD"
 
 if [ -n "$TMUX" ]; then
-    # Inside tmux → create Manager window in current session
+    # Inside tmux → use current session name
+    CURRENT_SESSION=$(tmux display-message -p '#{session_name}')
+    SETUP_CMD="cd $(pwd) && export SESSION_NAME=$CURRENT_SESSION && echo '--- Launching Manager...' && $MANAGER_CMD"
     tmux new-window -n "Manager"
     tmux send-keys -t "Manager" "$SETUP_CMD" Enter
-    echo "✓ Manager window created in current session"
+    echo "✓ Manager window created in session '$CURRENT_SESSION'"
 else
     # Outside tmux → create detached session
     tmux kill-session -t "$SESSION" 2>/dev/null
