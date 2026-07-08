@@ -22,7 +22,7 @@ git clone <repo> && cd agent-teamwork
 | **Có** (worker agents đang chạy) | Tạo window "Manager" vào session có sẵn — **không kill gì** |
 | **Chưa** | Tạo session `agent-session` mới (detached, persist sau SSH disconnect) |
 
-Manager agent được launch với `--prompt "$(cat prompts/manager_prompt.md)"` — prompt được pass trực tiếp vào agent làm system instructions, không chỉ hiển thị trên terminal.
+Manager agent được launch với agent config `.opencode/agents/manager.md` — system prompt được load làm instructions cho Manager, không phải user message.
 
 ## Cấu trúc
 
@@ -32,8 +32,11 @@ agent-teamwork/
 ├── setup.sh                 ← Khởi tạo session
 ├── tmux_controller.sh       ← Điều khiển workers qua tmux
 ├── manager.sh               ← Script quản lý workers (cùng API)
+├── .opencode/
+│   └── agents/
+│       └── manager.md       ← Agent definition (system prompt cho Manager)
 ├── prompts/
-│   └── manager_prompt.md    ← Prompt cho Manager agent
+│   └── manager_prompt.md    ← Prompt gốc (reference)
 ├── test_agent_teamwork.sh   ← Test suite
 └── README.md
 ```
@@ -219,18 +222,11 @@ Test suite kiểm tra: tạo/kill worker, duplicate, max_workers, custom model, 
 | Code | Ý nghĩa |
 |------|---------|
 | `0` | Worker hoàn thành (idle) |
-| `1` | Timeout |
-| `2` | Worker cần input (ask/confirm) — user phải trả lời thủ công |
+| `1` | Timeout — Manager tự `read` để xử lý |
 
 ### Auto-Handled Events
 
-`wait_prompt` tự động xử lý các sự kiện sau:
-
-| Sự kiện | Hành động |
-|---------|-----------|
-| `△ Permission required` | Auto gửi Enter (Allow once) |
-| `△ Always allow` | Auto gửi Enter (Confirm) |
-| `△ Ask / Confirm / Question` | Return exit code 2 — user phải response |
+`wait_prompt` tự động xử lý các sự kiện Permission/Allow. Manager agent (AI) tự detect và xử lý các hội thoại `Ask/Confirm/Question` — không cần exit code riêng.
 
 ## Biến Môi Trường
 

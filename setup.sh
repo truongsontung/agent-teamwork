@@ -9,9 +9,9 @@ MANAGER_MODEL=$(jq -r '.manager.model // "mimo/mimo-auto"' "$CONFIG" 2>/dev/null
 export SESSION_NAME="$SESSION"
 
 MANAGER_TOOL=$(jq -r '.manager.tool // "opencode"' "$CONFIG" 2>/dev/null)
-MANAGER_CMD="$MANAGER_TOOL --model $MANAGER_MODEL"
+MANAGER_CMD="$MANAGER_TOOL --model $MANAGER_MODEL --agent manager"
 
-SETUP_CMD="cd $(pwd) && export SESSION_NAME=$SESSION && echo '--- Launching Manager...' && $MANAGER_CMD --prompt \"\$(cat prompts/manager_prompt.md)\""
+SETUP_CMD="cd $(pwd) && export SESSION_NAME=$SESSION && echo '--- Launching Manager...' && $MANAGER_CMD"
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     # Session exists: add Manager window

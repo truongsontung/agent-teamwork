@@ -66,11 +66,9 @@ wait_prompt() {
             sleep 0.5; continue
         fi
         
-        # Auto-handle "Ask" questions: notify user
+        # Opencode dialog detection — Manager agent tự xử lý
         if echo "$screen" | grep -qE '△\s*(Ask|Confirm|Question)'; then
-            echo "! Worker '$target' needs input (ask/confirm)"
-            echo "! $(echo "$screen" | grep -oP '.{0,50}(Ask|Confirm|Question).{0,50}')"
-            return 2
+            sleep 0.5; continue
         fi
         
         # Check for opencode idle state (ctrl+p hint = idle)
@@ -270,7 +268,7 @@ Tmux Controller
 USAGE:
   $0 send <target> <command>     Send command (multi-word)
   $0 read <target>               Read screen
-  $0 wait <target> [timeout]     Wait for completion (exit: 0=done, 1=timeout, 2=needs input)
+  $0 wait <target> [timeout]     Wait for completion (0=done, 1=timeout)
   $0 smart <target> <command>    Send + wait (auto-handles permission/allow dialogs)
   $0 create <name> [model]       Create worker
   $0 kill <name>                 Kill worker
@@ -279,13 +277,11 @@ USAGE:
 
 EXIT CODES (wait/smart):
   0 = Worker finished (idle)
-  1 = Timeout
-  2 = Worker needs user input (ask/confirm)
+  1 = Timeout — Manager tự read panel và xử lý
 
 AUTO-HANDLED EVENTS:
   - Permission required → auto-allow once
   - Always allow → auto-confirm
-  - Other dialogs → return exit 2, user must respond
 
 EXAMPLES:
   $0 send Worker-1 npm install

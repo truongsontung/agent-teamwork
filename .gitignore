@@ -21,6 +21,7 @@ Thumbs.db
 # Agent runtime state
 .mimocode/
 .opencode/
+!.opencode/agents/
 
 # Temp
 tmp/
