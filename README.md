@@ -1,119 +1,110 @@
-# Agent Teamwork — opencode serve workers
+# Agent Teamwork
 
-Hệ thống Manager → Worker qua **REST HTTP API + SSE event monitor**.
+Hệ thống Manager → Worker cho opencode. Manager phân rã task, Worker thực thi song song với context biệt lập — giảm token 3-5x.
 
-- **Manager**: opencode TUI (tmux window), nhận task từ user, phân rã, điều phối worker
-- **Workers**: `opencode serve` processes trên port riêng, mỗi worker = 1 context biệt lập
-- **Daemon**: 1 process thống nhất, chạy ngầm:
-  - **Manager permission**: auto-Enter (screen capture tmux)
-  - **Worker events**: SSE monitor → ghi file `.worker/<name>.status`
-  - **Worker permission**: báo Manager qua status file → Manager quyết định allow/deny
-  - **Cleanup**: khi Manager tắt hoặc Ctrl+C → kill workers + xoá `.worker/`
+## Yêu cầu
 
-## Kiến trúc
-
-```
-setup.sh
-├── Manager (tmux window, opencode TUI)
-│   └── permission: bot auto-Enter (screen capture)
-│
-├── Daemon (1 process, background)
-│   ├── Subprocess: serve_controller.sh bot
-│   │   └── 1 SSE monitor/worker → ghi status files
-│   ├── Loop: check Manager alive + auto-Enter permission
-│   └── On Manager exit: kill workers → rm .worker/ → exit
-│
-└── Workers (opencode serve :4091, :4092, ...)
-    ├── /session/:id/message     ← Manager gửi task (HTTP POST)
-    ├── /session/:id/permissions ← Manager allow/deny
-    ├── /event (SSE)             ← Bot đọc events
-    └── /session/status          ← Poll fallback
-```
-
-## Permission — xử lý triệt để
-
-Config `"permission": {"*": "allow"}` **không triệt để** — vẫn có prompt mà config không phủ.
-
-| Ai gặp permission | Ai phát hiện | Ai xử lý |
-|---|---|---|
-| **Manager TUI** | Daemon (screen capture) | Daemon auto-Enter |
-| **Worker serve** | Bot SSE (`permission.asked`) | Ghi file → Manager đọc → `allow`/`deny` |
-
-```
-Worker gặp permission
-  → SSE event "permission.asked"
-  → Bot ghi .worker/<n>.status = "permission"
-  → Bot ghi .worker/<n>.permission = JSON chi tiết
-  → Manager gọi: status Worker-1 → thấy "permission"
-  → Manager gọi: permission-info Worker-1 → xem chi tiết
-  → Manager gọi: allow Worker-1 → approve
-  → Worker tiếp tục chạy
-```
-
-## Cài đặt & Chạy
+- `tmux` `jq` `curl` `ss` (hoặc `lsof`)
+- `opencode` trong PATH
 
 ```bash
-cd agent-teamwork/
-./setup.sh
+sudo apt install tmux jq curl
 ```
 
-Khi Manager TUI tắt (hoặc Ctrl+C) → **tự động kill toàn bộ workers + xoá `.worker/`**.
-
-## API — serve_controller.sh
+## Dùng ngay sau khi clone
 
 ```bash
-# Tạo worker
-./serve_controller.sh create Worker-1
-./serve_controller.sh create Worker-2 opencode/gpt-5.5
+# 1. Clone về đâu cũng được
+git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
 
-# Gửi task (NON-BLOCKING — khuyên dùng)
-./serve_controller.sh send-async Worker-1 "Review src/api/"
+# 2. Vào thư mục dự án của bạn
+cd ~/my-project
 
-# Kiểm tra trạng thái
-./serve_controller.sh status Worker-1        # idle|running|permission|error|dead
-./serve_controller.sh status-all
+# 3. Chạy setup (tạo ./agent + launch Manager trong tmux)
+~/agent-teamwork/setup.sh
 
-# Xem + xử lý permission
-./serve_controller.sh permission-info Worker-1
-./serve_controller.sh allow Worker-1
-./serve_controller.sh deny Worker-1
-
-# Đọc kết quả
-./serve_controller.sh result Worker-1        # text
-./serve_controller.sh result-full Worker-1   # full JSON
-
-# Quản lý
-./serve_controller.sh dashboard
-./serve_controller.sh kill Worker-1
-./serve_controller.sh killall
+# 4. Mở terminal khác, attach vào tmux để nói chuyện với Manager
+tmux attach -t agent-teamwork
 ```
 
-## File trạng thái (`.worker/`)
+Manager đã sẵn sàng trong tmux window. Gõ task cho nó:
 
-| File | Nội dung |
+```
+Xây dựng hệ thống login với JWT, gồm API backend, bảng DB, form frontend
+```
+
+Manager sẽ tự động:
+- Phân rã → 3 worker (backend, db, frontend)
+- Tạo `./agent create`, gửi `./agent send-async`, poll `./agent status`
+- Gom kết quả `./agent result`, báo cáo lại cho bạn
+
+## Dừng
+
+```bash
+# Ctrl+C ở terminal chạy setup.sh
+# Hoặc: đóng tmux window Manager → daemon tự dọn
+```
+
+Tự động: kill toàn bộ worker + xoá `.worker/` + xoá `./agent` + xoá agent files.
+
+## Manager thấy gì
+
+Manager KHÔNG biết agent-teamwork cài ở đâu. Nó chỉ thấy:
+
+```
+$ ls
+agent    src/    package.json    ...
+
+$ ./agent create Worker-1
++Worker-1
+
+$ ./agent send-async Worker-1 "nhiệm vụ"
++
+
+$ ./agent status Worker-1
+idle
+
+$ ./agent result Worker-1
+...kết quả text...
+
+$ ./agent kill Worker-1
+-Worker-1
+```
+
+Tất cả đều là black-box — giống như gõ `opencode` mà không cần biết code ở đâu.
+
+## API ./agent
+
+| Lệnh | Output |
 |---|---|
-| `<name>.json` | Worker state (port, pid, model) |
-| `<name>.status` | idle / running / permission / error / dead |
-| `<name>.permission` | JSON chi tiết permission đang chờ |
-| `<name>.permission_id` | ID để gọi POST permissions |
-| `<name>.error` | JSON lỗi |
-| `<name>.sse_pid` | PID của SSE monitor |
-| `<name>.last_result` | Kết quả cuối cùng |
-| `configs/<name>.json` | Config riêng mỗi worker |
-| `daemon.pid` | PID của daemon |
-| `worker_bot.pid` | PID của worker bot |
+| `create <name> [model]` | `+name` |
+| `send-async <name> "<task>"` | `+` |
+| `status <name>` | `idle` \| `running` \| `permission` \| `error` \| `dead` |
+| `status-all` | `name status` mỗi dòng |
+| `result <name>` | text kết quả |
+| `permission-info <name>` | `tool=X id=Y` + args |
+| `allow <name>` / `deny <name>` | `ok` |
+| `kill <name>` | `-name` |
+| `killall` | số worker bị kill |
+| `dashboard` | `name status` mỗi dòng |
 
-## Cấu trúc thư mục
+## Cấu hình
+
+Sửa `~/agent-teamwork/manager.json` và `~/agent-teamwork/worker.json` trước khi chạy setup nếu cần đổi model, permission, max_workers.
+
+## Cấu trúc
 
 ```
-agent-teamwork/
-├── manager.json              ← Manager config + prompt
-├── worker.json               ← Worker config + serve params
-├── serve_controller.sh       ← Controller chính (REST + SSE)
-├── setup.sh                  ← Khởi tạo + Manager TUI + Daemon
-├── tmux_controller.sh        ← (legacy) tmux-based controller
-├── manager.sh                ← (legacy) tmux-based manager
-├── .worker/                  ← State dir (tự tạo, tự xoá khi exit)
-├── tests/
+~/agent-teamwork/           ← clone về đây, không đụng sau setup
+├── manager.json
+├── worker.json
+├── serve_controller.sh
+├── setup.sh
 └── README.md
+
+~/my-project/               ← dự án của bạn
+├── agent                   ← wrapper (tự tạo/xoá bởi setup)
+├── .worker/                ← state dir (tự tạo/xoá)
+├── .opencode/              ← config Manager (tự tạo)
+└── src/ ...                ← code dự án
 ```
