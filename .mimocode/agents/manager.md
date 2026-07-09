@@ -49,11 +49,11 @@ gán quyền khác nhau cho từng worker:
 ```bash
 # Worker bị giới hạn (mặc định): chỉ ghi trong dự án, không web
 # Worker cần ghi /tmp:
-jq '.permission.external_directory."/tmp/*" = "allow"' worker.json > /tmp/wk.json && mv /tmp/wk.json worker.json
+jq '.permission.external_directory."/tmp/*" = "allow"' worker.json > ./wk_tmp.json && mv ./wk_tmp.json worker.json
 /home/vps2/agent-teamwork/tmux_controller.sh create Worker-Full
 
 # Sau đó restore quyền mặc định:
-jq '.permission.external_directory."/tmp/*" = "deny"' worker.json > /tmp/wk.json && mv /tmp/wk.json worker.json
+jq '.permission.external_directory."/tmp/*" = "deny"' worker.json > ./wk_tmp.json && mv ./wk_tmp.json worker.json
 ```
 
 - Mỗi lần `create` worker, file agent + config của worker được GHI ĐÈ HOÀN TOÀN
