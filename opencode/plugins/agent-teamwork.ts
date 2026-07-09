@@ -295,13 +295,13 @@ const toolDefs = {
     },
     async execute(args, ctx) {
       const w = workers.get(args.name)
-      if (!w) return "(không tìm thấy)"
+      if (!w) return "(không tìm thấy worker)"
       if (w.lastResult) return w.lastResult
       try {
         const txt = require("fs").readFileSync(resultPath(args.name), "utf-8")
         if (txt) { w.lastResult = txt; return txt }
       } catch {}
-      return "(chưa xong)"
+      return "(chưa xong — đợi !ev done, không gọi lại)"
     },
   }),
 
