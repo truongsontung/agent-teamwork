@@ -169,8 +169,8 @@ Khi `smart` return 2 (worker gặp permission/ask prompt):
 
 3. Gửi phím (DÙNG tmux send-keys TRỰC TIẾP, không dùng send):
    - Allow once:   ./tmux_controller.sh allow Worker-X       (Enter ngay)
-   - Allow always:  tmux send-keys -t $SESSION:Worker-X Right Enter
-   - Reject:        tmux send-keys -t $SESSION:Worker-X Right Right Enter
+   - Allow always:  tmux send-keys -t $SESSION_NAME:Worker-X Right Enter
+   - Reject:        tmux send-keys -t $SESSION_NAME:Worker-X Right Right Enter
      (SESSION là biến môi trường có sẵn)
 
 ## TUYỆT ĐỐI — chỉ dùng ./tmux_controller.sh, không dùng task/skill
