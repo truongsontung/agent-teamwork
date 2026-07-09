@@ -270,16 +270,18 @@ const toolDefs = {
   }),
 
   worker_result: tool({
-    description: "Đọc kết quả text của worker đã hoàn thành.",
+    description: "Đọc kết quả worker đã done (idle). Chỉ gọi SAU !ev done.",
     args: {
       name: tool.schema.string().describe("Tên worker"),
     },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) throw new Error(`Worker '${args.name}' not found`)
+      if (w.status !== "idle") throw new Error(`${args.name} not done yet (${w.status})`)
       if (w.lastResult) return w.lastResult
       try {
         const txt = require("fs").readFileSync(resultPath(args.name), "utf-8")
+        w.lastResult = txt
         return txt || "(empty)"
       } catch {
         throw new Error("No result yet")
