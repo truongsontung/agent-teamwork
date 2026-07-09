@@ -53,23 +53,16 @@ if tmux capture-pane -t "Manager" -p 2>/dev/null | grep -q "I trust this folder"
     tmux send-keys -t "Manager" Enter
 fi
 
-# Bot nền: auto-Enter permission prompt của Manager + dọn worker khi Manager thoát
+# Bot nền: auto-Enter permission prompt + tự tắt khi Manager đóng
 (
-    while tmux has-session -t "$SESSION" 2>/dev/null; do
+    while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
         screen=$(tmux capture-pane -t "$SESSION:Manager" -p 2>/dev/null)
         if echo "$screen" | grep -qE "Permission required|Allow once|Always allow|Reject"; then
             tmux send-keys -t "$SESSION:Manager" Enter
         fi
         sleep 3
     done
-) &
-
-# Bot dọn dẹp: khi cửa sổ Manager biến mất (user exit) -> kill tất cả worker
-(
-    while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
-        sleep 5
-    done
-    # Manager window gone -> kill all workers
+    # Manager gone -> kill all workers
     tmux list-windows -t "$SESSION" -F '#{window_index} #{window_name}' 2>/dev/null | while read idx name; do
         [ "$name" != "Manager" ] && tmux kill-window -t "$SESSION:$idx" 2>/dev/null
     done
