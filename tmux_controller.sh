@@ -82,6 +82,16 @@ read_screen() {
     tmux capture-pane -t "$SESSION:$target" -p 2>/dev/null
 }
 
+# Đọc output worker đã lọc sạch TUI — chỉ giữ nội dung thật (tool call, bash, kết quả)
+read_summary() {
+    local target="$1"
+    local screen=$(read_screen "$target" 2>/dev/null)
+    echo "$screen" \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | LC_ALL=C grep -vE '^[[:space:]]*$|█|▀|▄|╹|┃|║|ctrl\+p|tab agents|settings|switch mode|interrupt|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|🛸|✦|●|◀|▲|▼|subage|comma' \
+        | tail -20
+}
+
 # Wait for command completion (shell + opencode TUI)
 # Dùng pipe-pane để phát hiện activity qua file thay vì sleep+capture-pane liên tục.
 # Chỉ gọi capture-pane khi có output mới (file size thay đổi).
@@ -297,6 +307,10 @@ case "${1:-}" in
     read)
         shift
         read_screen "$@"
+        ;;
+    summary)
+        shift
+        read_summary "$@"
         ;;
     wait)
         shift
