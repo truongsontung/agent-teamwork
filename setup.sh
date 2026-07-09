@@ -52,4 +52,16 @@ sleep 5
 if tmux capture-pane -t "Manager" -p 2>/dev/null | grep -q "I trust this folder"; then
     tmux send-keys -t "Manager" Enter
 fi
-echo "✓ Manager: tool $mgr_tool, model $mgr_model, project $PROJECT_DIR"
+
+# Bot nền: theo dõi Manager, auto-Enter khi gặp permission prompt của chính Manager
+# (Worker prompt do Manager tự xử lý qua smart + allow)
+(
+    while tmux has-session -t "$SESSION" 2>/dev/null; do
+        screen=$(tmux capture-pane -t "Manager" -p 2>/dev/null)
+        if echo "$screen" | grep -qE "Permission required|Allow once|Always allow|Reject"; then
+            tmux send-keys -t "Manager" Enter
+        fi
+        sleep 3
+    done
+) &
+echo "✓ Manager: tool $mgr_tool, model $mgr_model, project $PROJECT_DIR (bot permission ON)"
