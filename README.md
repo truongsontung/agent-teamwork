@@ -12,14 +12,11 @@ Hệ thống quản lý nhiều AI agent (opencode / mimo) qua tmux. Một **Man
 
 ```
 agent-teamwork/
-├── manager.json              ← Cấu hình Manager (tool, model, permission)
-├── worker.json               ← Cấu hình Worker  (tool, model, max_workers, permission)
-├── setup.sh                  ← Khởi tạo session, sinh tool config, launch Manager
+├── manager.json              ← Cấu hình Manager (tool, model, permission, prompt, ...)
+├── worker.json               ← Cấu hình Worker  (tool, model, max_workers, permission, prompt, ...)
+├── setup.sh                  ← Khởi tạo session, sinh tool config + agent def, launch Manager
 ├── tmux_controller.sh        ← Điều khiển workers qua tmux (API)
 ├── manager.sh                ← Script quản lý workers (cùng API với controller)
-├── prompts/
-│   ├── manager_prompt.md     ← System prompt Manager
-│   └── worker_prompt.md      ← System prompt Worker
 ├── tests/                    ← Unit tests
 ├── test_agent_teamwork.sh    ← Integration test suite
 └── README.md
@@ -43,6 +40,9 @@ agent-teamwork/
 {
   "tool": "mimo",
   "model": "mimo/mimo-auto",
+  "description": "Manager agent điều khiển Worker agents qua tmux",
+  "mode": "primary",
+  "prompt": "BẠN LÀ MANAGER. BẠN TỰ HÀNH ĐỘNG — KHÔNG BAO GIỜ BẢO USER LÀM GÌ.\n\nKhi nhận yêu cầu từ user, bạn PHẢI ...",
   "permission": {
     "bash": "allow",
     "read": "allow",
@@ -74,6 +74,9 @@ agent-teamwork/
     "opencode/gpt-5.5",
     "opencode/claude-opus-4-8"
   ],
+  "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",
+  "mode": "primary",
+  "prompt": "BẠN LÀ WORKER. BẠN CHỈ THỰC THI LỆNH TỪ MANAGER.\n\n- KHÔNG tự đặt mục tiêu, KHÔNG hỏi user ...",
   "permission": {
     "bash": "allow",
     "read": "allow",
@@ -97,7 +100,12 @@ agent-teamwork/
 |-------|-------|
 | `tool` | Tool launch (`opencode` / `mimo`) |
 | `model` | Model cho agent đó |
+| `max_workers` | (_worker.json_) số worker tối đa |
+| `available_models` | (_worker.json_) danh sách model có thể chọn khi tạo worker |
 | `permission` | Quyền của tool (theo schema opencode/mimo), gồm `external_directory` |
+| `description` | Mô tả agent (ghi vào frontmatter của agent)` |
+| `mode` | Agent mode (`"primary"`) |
+| `prompt` | System prompt (thân prompt, ghi vào agent)` |
 
 ## Tách biệt quyền Manager / Worker
 
@@ -170,7 +178,7 @@ agent-teamwork/
 
 ## Workflow
 
-Manager là một AI agent trong window "Manager". Prompt (`prompts/manager_prompt.md`) hướng dẫn nó dùng `./tmux_controller.sh` để tạo workers, gửi lệnh, đọc kết quả. Manager tự hành động, không hỏi user.
+Manager là một AI agent trong window "Manager". Prompt (field `prompt` trong `manager.json`) hướng dẫn nó dùng `./tmux_controller.sh` để tạo workers, gửi lệnh, đọc kết quả. Manager tự hành động, không hỏi user.
 
 ```bash
 # Manager tự tạo worker, giao task, đọc kết quả
