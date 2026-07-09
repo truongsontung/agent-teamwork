@@ -19,8 +19,9 @@ mgr_desc=$(jq -r '.description' "$MGR")
 mgr_mode=$(jq -r '.mode' "$MGR")
 mgr_prompt=$(jq -r '.prompt' "$MGR")
 
-# Thay placeholder bằng đường dẫn thực tế
+# Thay placeholder + thêm AGENT_HOME vào external_directory (để Manager truy cập script)
 mgr_perm="${mgr_perm//__PROJECT_DIR__/$PROJECT_DIR}"
+mgr_perm=$(echo "$mgr_perm" | jq --arg d "$SCRIPT_DIR" '.external_directory[$d + "/*"] = "allow"')
 mgr_prompt="${mgr_prompt//__AGENT_HOME__/$SCRIPT_DIR}"
 
 dir_for() { [ "$1" = "opencode" ] && echo .opencode || echo .mimocode; }
