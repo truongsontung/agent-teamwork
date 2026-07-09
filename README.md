@@ -1,70 +1,60 @@
 # Agent Teamwork
 
-1 lệnh. Plugin native. Manager điều phối worker ngay trong opencode TUI.
-
-```
-cd ~/my-project
-~/agent-teamwork/setup.sh
-```
-
-## Kiến trúc
-
-```
-┌─ Manager TUI ────────────────────────────────────────┐
-│  Plugin agent-teamwork.ts (380 dòng TypeScript)      │
-│  ├── worker_create / send / status / result          │
-│  ├── worker_allow / deny / kill / killall            │
-│  ├── SSE monitor per worker (real-time)              │
-│  ├── client.tui.appendPrompt() bắn !ev vào input     │
-│  └── dispose: kill workers khi exit                  │
-└──────────────────────────────────────────────────────┘
-         │ Bun.spawn          │ fetch / SSE
-         ▼                    ▼
-┌──────────────┐   ┌──────────────┐
-│ :4091 serve  │   │ :4092 serve  │   ...
-│ context: BE  │   │ context: FE  │
-└──────────────┘   └──────────────┘
-```
-
-## Dùng
+Cài 1 lần — dùng mọi project. Manager trong opencode TUI, điều phối worker song song.
 
 ```bash
 git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
-cd ~/my-project
-~/agent-teamwork/setup.sh
+~/agent-teamwork/install.sh
 ```
 
-Gõ task cho Manager trong TUI:
+Xong. Mở opencode ở **bất kỳ project nào** → bấm **Tab** → Manager sẵn sàng.
+
+## Dùng
+
+Trong Manager TUI, gõ task:
 
 ```
 Xây dựng login JWT: API backend + bảng DB + form frontend
 ```
 
-Manager tự: `worker_create` 3 worker → `worker_send` song song → đợi `!ev done` → `worker_result` → `worker_killall`.
+Manager tự phân rã → `worker_create` → `worker_send` → đợi `!ev done` → gom kết quả.
 
-## Yêu cầu
+## Cấu hình
 
-- `opencode` trong PATH
-- `jq`
-
-## Sự kiện
-
-Plugin bắn `!ev` vào input Manager khi worker đổi trạng thái:
-
-| Event | Manager làm gì |
+| File | Để làm gì |
 |---|---|
-| `!ev X done` | `worker_result X` |
-| `!ev X permission` | `worker_permission_info X` → `worker_allow X` |
-| `!ev X error` | `worker_status X` kiểm tra |
+| `~/.config/opencode/agents/manager.md` | Model Manager, prompt, permission |
+| `~/.config/opencode/worker.json` | Model Worker mặc định, max_workers |
+| `~/.config/opencode/plugins/agent-teamwork.ts` | Plugin (không cần sửa) |
 
-## Cấu trúc thư mục
+Đổi model Manager: sửa dòng `model:` trong `manager.md`.
+Đổi model Worker: sửa `model` trong `worker.json`.
+
+## Cài đặt thủ công
+
+Nếu không muốn dùng `install.sh`:
+
+```bash
+cp opencode/plugins/agent-teamwork.ts ~/.config/opencode/plugins/
+cp worker.json ~/.config/opencode/
+# Tự tạo ~/.config/opencode/agents/manager.md từ manager.json
+```
+
+## Gỡ
+
+```bash
+rm ~/.config/opencode/plugins/agent-teamwork.ts
+rm ~/.config/opencode/agents/manager.md
+```
+
+## Cấu trúc repo
 
 ```
 agent-teamwork/
-├── manager.json            ← Prompt Manager
-├── worker.json             ← Config Worker (model, permission)
-├── setup.sh                ← 1 lệnh: copy plugin + viết agent + launch
+├── install.sh              ← Cài toàn cục 1 lần
+├── manager.json            ← Nguồn prompt Manager
+├── worker.json             ← Config worker
 ├── opencode/plugins/
-│   └── agent-teamwork.ts   ← TOÀN BỘ HỆ THỐNG (plugin native)
+│   └── agent-teamwork.ts   ← Plugin (380 dòng TypeScript)
 └── README.md
 ```

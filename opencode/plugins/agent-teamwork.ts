@@ -9,7 +9,7 @@ const DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
 let _client: any = null  // SDK client, set at plugin init
 const WORKER_CONFIG = (() => {
   try {
-    const home = process.env.AGENT_TEAMWORK_HOME || ""
+    const home = process.env.AGENT_TEAMWORK_HOME || `${process.env.HOME || "~"}/.config/opencode`
     const txt = require("fs").readFileSync(`${home}/worker.json`, "utf-8")
     return JSON.parse(txt)
   } catch { return {} }
