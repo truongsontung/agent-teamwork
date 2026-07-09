@@ -143,12 +143,15 @@ function handleSSE(name: string, event: any) {
     _client?.tui.appendPrompt({ body: { text: `!ev ${name} done` } }).catch(() => {})
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
-    _client?.tui.appendPrompt({ body: { text: `!ev ${name} error` } }).catch(() => {})
+    const err = props.error || props.message || ""
+    _client?.tui.appendPrompt({ body: { text: `!ev ${name} error ${err}` } }).catch(() => {})
   } else if (type === "permission.asked" && prevStatus !== "permission") {
     setStatus(name, "permission")
     if (w) w.pendingPermission = props.id
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
-    _client?.tui.appendPrompt({ body: { text: `!ev ${name} permission` } }).catch(() => {})
+    const perm = props.permission || "?"
+    const pats = (props.patterns || []).join(",")
+    _client?.tui.appendPrompt({ body: { text: `!ev ${name} permission ${perm} [${pats}]` } }).catch(() => {})
   } else if (type === "permission.replied") {
     setStatus(name, "running")
     if (w) w.pendingPermission = undefined
