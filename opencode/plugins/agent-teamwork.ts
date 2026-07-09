@@ -103,20 +103,13 @@ async function createSession(port: number, name: string): Promise<string> {
 
 // ── SSE Monitor (per worker) ────────────────────────────
 
-let _mgrSessionId = ""
-
 async function pushEvent(msg: string) {
-  if (!_client || !_mgrSessionId) {
-    // fallback: append to input
-    _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
-    return
-  }
+  if (!_client) return
   try {
-    await _client.session.prompt_async({
-      path: { id: _mgrSessionId },
-      body: { parts: [{ type: "text", text: msg }] },
-    })
+    await _client.tui.appendPrompt({ body: { text: msg } })
+    await _client.tui.submitPrompt()
   } catch {
+    // fallback: just append
     _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
   }
 }
@@ -208,7 +201,6 @@ const toolDefs = {
       model: tool.schema.string().optional().describe(`Model, mặc định ${DEFAULT_MODEL}`),
     },
     async execute(args, ctx) {
-      if (!_mgrSessionId && ctx.sessionID) _mgrSessionId = ctx.sessionID
       const name = args.name
       if (workers.has(name)) throw new Error(`Worker '${name}' already exists`)
       const max = WORKER_CONFIG.max_workers || 5
