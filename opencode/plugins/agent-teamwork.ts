@@ -156,9 +156,7 @@ function handleSSE(name: string, event: any) {
   const prevStatus = w?.status || ""
 
   if (type === "session.idle" && prevStatus !== "idle") {
-    setStatus(name, "idle")
-    saveResult(name, event)
-    pushEvent(`!ev ${name} done`)
+    handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
     const err = props.error || props.message || ""
@@ -180,21 +178,42 @@ function handleSSE(name: string, event: any) {
   }
 }
 
-function saveResult(name: string, event: any) {
+function saveResult(name: string) {
   const w = workers.get(name)
   if (!w) return
-  // Get result text from session messages
   fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
     .then(r => r.json())
-    .then((msgs: any) => {
-      const parts = Array.isArray(msgs) ? msgs : (msgs.parts || [msgs])
-      const text = parts
-        .flatMap((m: any) => (m.parts || [m]).filter((p: any) => p.type === "text").map((p: any) => p.text))
-        .join("\n")
-      w.lastResult = text || JSON.stringify(msgs)
-      require("fs").writeFileSync(resultPath(name), w.lastResult)
+    .then((data: any) => {
+      const msgs = Array.isArray(data) ? data : [data]
+      const text = msgs
+        .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
+        .join("\n").trim()
+      if (text) {
+        w.lastResult = text
+        try { require("fs").writeFileSync(resultPath(name), text) } catch {}
+      }
     })
     .catch(() => {})
+}
+
+async function handleIdle(name: string) {
+  const w = workers.get(name)
+  if (!w || w.status === "idle") return
+  setStatus(name, "idle")
+  // Fetch result before pushing event
+  try {
+    const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
+    const data = await res.json()
+    const msgs = Array.isArray(data) ? data : [data]
+    const text = msgs
+      .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
+      .join("\n").trim()
+    if (text) {
+      w.lastResult = text
+      try { require("fs").writeFileSync(resultPath(name), text) } catch {}
+    }
+  } catch {}
+  pushEvent(`!ev ${name} done`)
 }
 
 // ── Tools ───────────────────────────────────────────────
@@ -381,8 +400,7 @@ export const AgentTeamwork: Plugin = async ({ client, $ }) => {
         const json = await res.json()
         const st = json[w.sessionId]?.type
         if (st === "idle" && w.status !== "idle") {
-          setStatus(name, "idle")
-          pushEvent(`!ev ${name} done`)
+          handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
         // Also check if stuck on busy for too long → might be permission
         if (st === "busy" && w.status === "permission") {
