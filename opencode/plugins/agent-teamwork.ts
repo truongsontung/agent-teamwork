@@ -376,7 +376,7 @@ export const AgentTeamwork: Plugin = async ({ client, $ }) => {
   // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
   const fallback = setInterval(async () => {
     for (const [name, w] of workers) {
-      if (w.status === "idle" || w.status === "dead" || w.status === "error") continue
+      if (w.status === "dead" || w.status === "error") continue
       try {
         const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
         const json = await res.json()
@@ -385,9 +385,13 @@ export const AgentTeamwork: Plugin = async ({ client, $ }) => {
           setStatus(name, "idle")
           pushEvent(`!ev ${name} done`)
         }
+        // Also check if stuck on busy for too long → might be permission
+        if (st === "busy" && w.status === "permission") {
+          // SSE caught it, but fallback confirms
+        }
       } catch {}
     }
-  }, 10000)
+  }, 5000)
 
   return {
     dispose: async () => {
