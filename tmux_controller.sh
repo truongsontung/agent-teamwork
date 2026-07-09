@@ -9,14 +9,15 @@ SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null
 write_worker_config() {
     local tool="$1"
     local dir=$([ "$tool" = "opencode" ] && echo .opencode || echo .mimocode)
+    local wk="${AGENT_TEAMWORK_HOME:-.}/worker.json"
     mkdir -p "$dir"
-    local perm=$(jq -c '.permission' worker.json 2>/dev/null)
+    local perm=$(jq -c '.permission' "$wk" 2>/dev/null)
     perm="${perm//__PROJECT_DIR__/$PWD}"
     jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
     # Sinh worker.md (agent definition) từ worker.json
-    local desc=$(jq -r '.description' worker.json 2>/dev/null)
-    local mode=$(jq -r '.mode' worker.json 2>/dev/null)
-    local prompt=$(jq -r '.prompt' worker.json 2>/dev/null)
+    local desc=$(jq -r '.description' "$wk" 2>/dev/null)
+    local mode=$(jq -r '.mode' "$wk" 2>/dev/null)
+    local prompt=$(jq -r '.prompt' "$wk" 2>/dev/null)
     mkdir -p "$dir/agents"
     printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$desc" "$mode" "$prompt" > "$dir/agents/worker.md"
 }
@@ -148,8 +149,9 @@ worker_exists() {
 # Create worker with validation
 create_worker() {
     local name="$1"
-    local model="${2:-$(jq -r '.model' worker.json 2>/dev/null || echo 'opencode/deepseek-v4-flash-free')}"
-    local tool=$(jq -r '.tool // "opencode"' worker.json 2>/dev/null)
+    local wk="${AGENT_TEAMWORK_HOME:-.}/worker.json"
+    local model="${2:-$(jq -r '.model' "$wk" 2>/dev/null || echo 'opencode/deepseek-v4-flash-free')}"
+    local tool=$(jq -r '.tool // "opencode"' "$wk" 2>/dev/null)
     
     check_session || return 1
     
@@ -160,7 +162,7 @@ create_worker() {
     fi
     
     # Check max workers (count all windows except Manager)
-    local max=$(jq -r '.max_workers' worker.json 2>/dev/null || echo 5)
+    local max=$(jq -r '.max_workers' "$wk" 2>/dev/null || echo 5)
     local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -v "Manager" | wc -l | tr -d ' ')
     if [ "$current" -ge "$max" ]; then
         echo "Error: Max workers ($max) reached"

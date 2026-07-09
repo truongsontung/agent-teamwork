@@ -2,7 +2,7 @@
 # Manager Agent - Control multiple workers
 
 SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null)}"
-WK="worker.json"
+WK="${AGENT_TEAMWORK_HOME:-.}/worker.json"
 MAX_WORKERS=$(jq -r '.max_workers // 5' "$WK" 2>/dev/null)
 DEFAULT_MODEL=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$WK" 2>/dev/null)
 DEFAULT_TOOL=$(jq -r '.tool // "opencode"' "$WK" 2>/dev/null)
@@ -14,13 +14,13 @@ write_worker_config() {
     local tool="$1"
     local dir=$([ "$tool" = "opencode" ] && echo .opencode || echo .mimocode)
     mkdir -p "$dir"
-    local perm=$(jq -c '.permission' worker.json 2>/dev/null)
+    local perm=$(jq -c '.permission' "$WK" 2>/dev/null)
     perm="${perm//__PROJECT_DIR__/$PWD}"
     jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
     # Sinh worker.md (agent definition) từ worker.json
-    local desc=$(jq -r '.description' worker.json 2>/dev/null)
-    local mode=$(jq -r '.mode' worker.json 2>/dev/null)
-    local prompt=$(jq -r '.prompt' worker.json 2>/dev/null)
+    local desc=$(jq -r '.description' "$WK" 2>/dev/null)
+    local mode=$(jq -r '.mode' "$WK" 2>/dev/null)
+    local prompt=$(jq -r '.prompt' "$WK" 2>/dev/null)
     mkdir -p "$dir/agents"
     printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$desc" "$mode" "$prompt" > "$dir/agents/worker.md"
 }
