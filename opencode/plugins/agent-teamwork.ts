@@ -103,6 +103,24 @@ async function createSession(port: number, name: string): Promise<string> {
 
 // ── SSE Monitor (per worker) ────────────────────────────
 
+let _mgrSessionId = ""
+
+async function pushEvent(msg: string) {
+  if (!_client || !_mgrSessionId) {
+    // fallback: append to input
+    _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
+    return
+  }
+  try {
+    await _client.session.prompt_async({
+      path: { id: _mgrSessionId },
+      body: { parts: [{ type: "text", text: msg }] },
+    })
+  } catch {
+    _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
+  }
+}
+
 async function monitorSSE(name: string, port: number) {
   while (true) {
     try {
@@ -140,18 +158,18 @@ function handleSSE(name: string, event: any) {
   if (type === "session.idle" && prevStatus !== "idle") {
     setStatus(name, "idle")
     saveResult(name, event)
-    _client?.tui.appendPrompt({ body: { text: `!ev ${name} done` } }).catch(() => {})
+    pushEvent(`!ev ${name} done`)
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
     const err = props.error || props.message || ""
-    _client?.tui.appendPrompt({ body: { text: `!ev ${name} error ${err}` } }).catch(() => {})
+    pushEvent(`!ev ${name} error ${err}`)
   } else if (type === "permission.asked" && prevStatus !== "permission") {
     setStatus(name, "permission")
     if (w) w.pendingPermission = props.id
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     const perm = props.permission || "?"
     const pats = (props.patterns || []).join(",")
-    _client?.tui.appendPrompt({ body: { text: `!ev ${name} permission ${perm} [${pats}]` } }).catch(() => {})
+    pushEvent(`!ev ${name} permission ${perm} [${pats}]`)
   } else if (type === "permission.replied") {
     setStatus(name, "running")
     if (w) w.pendingPermission = undefined
@@ -190,6 +208,7 @@ const toolDefs = {
       model: tool.schema.string().optional().describe(`Model, mặc định ${DEFAULT_MODEL}`),
     },
     async execute(args, ctx) {
+      if (!_mgrSessionId && ctx.sessionID) _mgrSessionId = ctx.sessionID
       const name = args.name
       if (workers.has(name)) throw new Error(`Worker '${name}' already exists`)
       const max = WORKER_CONFIG.max_workers || 5
