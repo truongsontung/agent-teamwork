@@ -148,9 +148,12 @@ function handleSSE(name: string, event: any) {
   const w = workers.get(name)
   const prevStatus = w?.status || ""
 
-  if (type === "session.idle" && prevStatus !== "idle") {
+  if (type === "tool.execute.before" && props.tool) {
+    _client?.tui.showToast({ body: { message: `${name}: ${props.tool}`, variant: "info", duration: 2000 } }).catch(() => {})
+  } else if (type === "session.idle" && prevStatus !== "idle") {
     setStatus(name, "idle")
     saveResult(name, event)
+    _client?.tui.showToast({ body: { message: `${name} done`, variant: "success" } }).catch(() => {})
     pushEvent(`!ev ${name} done`)
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
