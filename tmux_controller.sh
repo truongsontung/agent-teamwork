@@ -54,6 +54,8 @@ read_screen() {
 }
 
 # Wait for command completion (shell + opencode TUI)
+# Dùng pipe-pane để phát hiện activity qua file thay vì sleep+capture-pane liên tục.
+# Chỉ gọi capture-pane khi có output mới (file size thay đổi).
 wait_prompt() {
     local target="$1"
     local timeout="${2:-60}"
@@ -67,44 +69,62 @@ wait_prompt() {
     local start=$(date +%s)
     local last_screen=""
     local stable_count=0
+    local outfile="/tmp/tmux-wp-$$-${target}"
+    local last_size=0
+    local interval=2
     
-    while true; do
-        local screen=$(read_screen "$target")
-        
-        # Worker bị giới hạn quyền: KHÔNG auto-allow (sẽ bypass quyền).
-        # Phát hiện prompt quyền / hỏi -> trả 2 để Manager tự xử lý.
+    # Pipe worker output -> file để phát hiện activity không cần capture-pane
+    tmux pipe-pane -t "$SESSION:$target" "cat >> $outfile" 2>/dev/null
+    cleanup_pipe() { tmux pipe-pane -t "$SESSION:$target" 2>/dev/null; rm -f "$outfile"; }
+    
+    # Helper: kiểm tra màn hình xem worker xong chưa
+    check_screen() {
+        local screen="$1"
+        # Permission / Ask prompt -> trả 2 để Manager xử lý
         if echo "$screen" | grep -qE "Permission required|Always allow|△\s*(Ask|Confirm|Question)"; then
-            return 2
+            cleanup_pipe; return 2
         fi
-        
-        # Check for opencode idle state (ctrl+p hint = idle)
-        if echo "$screen" | grep -qi "ctrl+p commands"; then
-            return 0
-        fi
-        
-        # Check for shell prompt
-        if echo "$screen" | grep -qE '[\$≥]\s*$'; then
-            return 0
-        fi
-        
-        # Stability detection (fallback)
+        # opencode idle (ctrl+p hint)
+        if echo "$screen" | grep -qi "ctrl+p commands"; then cleanup_pipe; return 0; fi
+        # Shell prompt
+        if echo "$screen" | grep -qE '[\$≥]\s*$'; then cleanup_pipe; return 0; fi
+        # Stability fallback
         if [ "$screen" = "$last_screen" ]; then
             stable_count=$((stable_count + 1))
-            if [ "$stable_count" -ge 4 ]; then
-                return 0
-            fi
+            if [ "$stable_count" -ge 3 ]; then cleanup_pipe; return 0; fi
         else
             stable_count=0
             last_screen="$screen"
         fi
+        return 3  # continue waiting
+    }
+    
+    # First check ngay lập tức (có thể worker đã xong)
+    local screen=$(read_screen "$target")
+    last_screen="$screen"
+    check_screen "$screen"
+    local rc=$?; [ "$rc" -ne 3 ] && return $rc
+    
+    while true; do
+        sleep $interval
         
+        local new_size=$(stat -c %s "$outfile" 2>/dev/null || echo 0)
+        
+        if [ "$new_size" -ne "$last_size" ]; then
+            # Activity detected -> capture-pane để phân tích
+            last_size="$new_size"
+            local screen=$(read_screen "$target")
+            check_screen "$screen"
+            local rc=$?; [ "$rc" -ne 3 ] && return $rc
+        fi
+        
+        # Timeout
         local now=$(date +%s)
         if [ $((now - start)) -ge $timeout ]; then
+            cleanup_pipe
             echo "! Timeout waiting for '$target'"
             return 1
         fi
-        
-        sleep 0.5
     done
 }
 

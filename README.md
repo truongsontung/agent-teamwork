@@ -167,6 +167,8 @@ agent-teamwork/
 | `1` | Timeout |
 | `2` | Permission / Ask / Confirm prompt — Manager phải `read` và xử lý |
 
+`wait` / `smart` dùng `pipe-pane` pipe output worker ra file → phát hiện activity qua file size thay vì `sleep` + `capture-pane` liên tục. Chỉ gọi `capture-pane` khi có output mới, giảm ~6x lần capture so với polling 0.5s.
+
 ### Interactive Mode
 
 ```bash

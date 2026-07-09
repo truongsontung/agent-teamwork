@@ -86,6 +86,7 @@ case "$1" in
         exit 0
         ;;
     list-panes) echo "12345"; exit 0 ;;
+    pipe-pane) exit 0 ;;   # No-op for pipe-pane in tests
     *) exit 0 ;;
 esac
 TMUX_MOCK
@@ -98,6 +99,21 @@ TMUX_MOCK
 case "$*" in *max_workers*) echo "3" ;; *default_model*) echo "mock/model-v1" ;; *) echo "null" ;; esac
 EOF
     chmod +x "$MOCK_DIR/jq"
+
+    # Mock stat (trả size tăng dần cho file output pipe-pane để phát hiện activity)
+    cat > "$MOCK_DIR/stat" << 'EOF'
+#!/bin/bash
+D="$(cd "$(dirname "$0")" && pwd)"
+case "$*" in
+    *tmux-wp-*)
+        n=$(cat "$D/call_count" 2>/dev/null || echo 1)
+        echo $((n + 1)) > "$D/call_count"
+        echo "$n"
+        ;;
+    *) /usr/bin/stat "$@" 2>/dev/null || echo "0" ;;
+esac
+EOF
+    chmod +x "$MOCK_DIR/stat"
 }
 
 set_mock_windows()  { echo "$1" > "$MOCK_DIR/windows.txt"; }
