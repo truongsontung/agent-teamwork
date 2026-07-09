@@ -33,6 +33,7 @@ worker_exists() { [ -f "$STATE_DIR/$1.json" ]; }
 worker_pid()   { worker_info "$1" | jq -r .pid; }
 worker_port()  { worker_info "$1" | jq -r .port; }
 worker_model() { worker_info "$1" | jq -r .model; }
+worker_sid()   { worker_info "$1" | jq -r .session_id; }
 
 alive() { kill -0 "$(worker_pid "$1" 2>/dev/null)" 2>/dev/null; }
 
@@ -110,11 +111,11 @@ monitor_worker() {
 
 cmd_allow() {
     check_worker "$1"
-    local port=$(worker_port "$1")
+    local port=$(worker_port "$1") sid=$(worker_sid "$1")
     local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "")
     [ -z "$pid" ] || [ "$pid" = "?" ] && die "no pending permission"
     curl -s --max-time 10 -X POST \
-        "http://127.0.0.1:$port/session/$1/permissions/$pid" \
+        "http://127.0.0.1:$port/session/$sid/permissions/$pid" \
         -H "Content-Type: application/json" -d '{"action":"allow"}' >/dev/null 2>&1
     rm -f "$STATE_DIR/${1}.permission" "$STATE_DIR/${1}.permission_id"
     echo "running" > "$STATE_DIR/${1}.status"
@@ -123,11 +124,11 @@ cmd_allow() {
 
 cmd_deny() {
     check_worker "$1"
-    local port=$(worker_port "$1")
+    local port=$(worker_port "$1") sid=$(worker_sid "$1")
     local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "")
     [ -z "$pid" ] || [ "$pid" = "?" ] && die "no pending permission"
     curl -s --max-time 10 -X POST \
-        "http://127.0.0.1:$port/session/$1/permissions/$pid" \
+        "http://127.0.0.1:$port/session/$sid/permissions/$pid" \
         -H "Content-Type: application/json" -d '{"action":"deny"}' >/dev/null 2>&1
     rm -f "$STATE_DIR/${1}.permission" "$STATE_DIR/${1}.permission_id"
     echo "running" > "$STATE_DIR/${1}.status"
@@ -157,11 +158,19 @@ cmd_create() {
         > "$STATE_DIR/${name}.log" 2>&1 &
     local pid=$!
 
-    mkdir -p "$STATE_DIR"
-    jq -n --arg n "$name" --arg p "$port" --arg i "$pid" --arg m "$model" \
-        '{name:$n,port:($p|tonumber),pid:($i|tonumber),model:$m}' > "$STATE_DIR/$name.json"
-
     wait_serve_ready "$port"
+
+    # Tạo session trong serve → lấy session_id (prefix ses_)
+    local sid
+    sid=$(curl -s --max-time 10 -X POST "http://127.0.0.1:$port/session" \
+        -H "Content-Type: application/json" \
+        -d "{\"title\":\"$name\"}" | jq -r '.id // empty' 2>/dev/null)
+    [ -z "$sid" ] && { kill "$pid" 2>/dev/null; die "session create failed"; }
+
+    mkdir -p "$STATE_DIR"
+    jq -n --arg n "$name" --arg p "$port" --arg i "$pid" --arg m "$model" --arg s "$sid" \
+        '{name:$n,port:($p|tonumber),pid:($i|tonumber),model:$m,session_id:$s}' > "$STATE_DIR/$name.json"
+
     monitor_worker "$name" "$port" &
     echo $! > "$STATE_DIR/${name}.sse_pid"
     echo "running" > "$STATE_DIR/${name}.status"
@@ -172,7 +181,8 @@ cmd_create() {
 cmd_send() {
     local name="$1"; shift; local prompt="$*"
     check_worker "$name"
-    local port=$(worker_port "$name") model_str=$(worker_model "$name")
+    local port=$(worker_port "$name") sid=$(worker_sid "$name")
+    local model_str=$(worker_model "$name")
     IFS='|' read -r provider model_id <<< "$(parse_model "$model_str")"
     local timeout=$(jq -r ".timeout // $DEFAULT_TIMEOUT" "$STATE_DIR/$name.json")
     rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
@@ -183,7 +193,7 @@ cmd_send() {
 
     local result http_code
     result=$(curl -s -w '\n%{http_code}' --max-time "$timeout" \
-        -X POST "http://127.0.0.1:$port/session/$name/message" \
+        -X POST "http://127.0.0.1:$port/session/$sid/message" \
         -H "Content-Type: application/json" -d "$payload" 2>&1)
     http_code=$(echo "$result" | tail -1)
     local body=$(echo "$result" | sed '$d')
@@ -197,7 +207,8 @@ cmd_send() {
 cmd_send_async() {
     local name="$1"; shift; local prompt="$*"
     check_worker "$name"
-    local port=$(worker_port "$name") model_str=$(worker_model "$name")
+    local port=$(worker_port "$name") sid=$(worker_sid "$name")
+    local model_str=$(worker_model "$name")
     IFS='|' read -r provider model_id <<< "$(parse_model "$model_str")"
     rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
 
@@ -206,7 +217,7 @@ cmd_send_async() {
     echo "$payload" > "$STATE_DIR/${name}.last_request"
 
     local hc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-        -X POST "http://127.0.0.1:$port/session/$name/prompt_async" \
+        -X POST "http://127.0.0.1:$port/session/$sid/prompt_async" \
         -H "Content-Type: application/json" -d "$payload" 2>&1)
     [ "$hc" = "204" ] || [ "$hc" = "200" ] || { echo "err: HTTP $hc"; return 1; }
     echo "+"
@@ -216,10 +227,10 @@ cmd_status() {
     local name="$1"
     [ -f "$STATE_DIR/${name}.status" ] && { cat "$STATE_DIR/${name}.status"; return; }
     alive "$name" 2>/dev/null || { echo "dead"; return; }
-    local port=$(worker_port "$name" 2>/dev/null)
+    local port=$(worker_port "$name" 2>/dev/null) sid=$(worker_sid "$name" 2>/dev/null)
     [ -z "$port" ] && { echo "?"; return; }
     curl -s --max-time 5 "http://127.0.0.1:$port/session/status" \
-        | jq -r ".[\"$name\"] // \"running\"" 2>/dev/null || echo "?"
+        | jq -r ".[\"$sid\"] // \"running\"" 2>/dev/null || echo "?"
 }
 
 cmd_status_all() {
@@ -241,8 +252,9 @@ cmd_result() {
 cmd_kill() {
     worker_exists "$1" || die "not found"
     local port=$(worker_port "$1" 2>/dev/null || echo "") pid=$(worker_pid "$1" 2>/dev/null || echo "")
+    local sid=$(worker_sid "$1" 2>/dev/null || echo "")
     [ -f "$STATE_DIR/${1}.sse_pid" ] && kill "$(cat "$STATE_DIR/${1}.sse_pid")" 2>/dev/null || true
-    [ -n "$port" ] && curl -s --max-time 3 -X POST "http://127.0.0.1:$port/session/$1/abort" >/dev/null 2>&1 || true
+    [ -n "$port" ] && [ -n "$sid" ] && curl -s --max-time 3 -X POST "http://127.0.0.1:$port/session/$sid/abort" >/dev/null 2>&1 || true
     [ -n "$pid" ] && { kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true; }
     rm -f "$STATE_DIR/$1.json" "$STATE_DIR/${1}".{log,last_request,last_result,status,status.prev,permission,permission_id,sse_pid,error,last_activity} "$STATE_DIR/configs/${1}.json"
     echo "-$1"
