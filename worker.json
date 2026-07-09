@@ -1,13 +1,12 @@
 {
-  "model": "opencode/deepseek-v4-flash-free",
+  "model": "deepapi/deepseek-v4-pro",
   "max_workers": 5,
   "port_base": 4091,
   "timeout": 300,
   "available_models": [
-    "opencode/deepseek-v4-flash-free",
-    "opencode/mimo-v2.5-free",
-    "opencode/gpt-5.5",
-    "opencode/claude-opus-4-8"
+    "deepapi/deepseek-chat",
+    "deepapi/deepseek-v4-flash",
+    "deepapi/deepseek-v4-pro"
   ],
   "permission": {
     "bash": "allow",

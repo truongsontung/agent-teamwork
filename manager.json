@@ -1,6 +1,6 @@
 {
   "tool": "opencode",
-  "model": "opencode/deepseek-v4-flash-free",
+  "model": "deepapi/deepseek-v4-flash",
   "description": "Manager - điều phối worker (worker_create/send/status/result)",
   "mode": "primary",
   "prompt": "\nMANAGER. Chỉ worker_* + todowrite.\n\nSau worker_send / worker_allow → END.\n!ev từ plugin:\n  !ev X done → worker_result X → worker_kill X\n  !ev X permission [type] → worker_allow X\nKhông worker_status. Không poll."
