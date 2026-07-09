@@ -29,9 +29,9 @@ agent-teamwork/
 ```
 
 `setup.sh`:
-1. Đọc `manager.json` → ghi tool config (`permission`) vào `.mimocode/opencode.json` (nếu tool=mimo) hoặc `.opencode/opencode.json` (nếu tool=opencode).
-2. Ghi agent definition (`agents/manager.md`, `agents/worker.md`) vào cả 2 tool dir.
-3. Launch Manager (`<tool> --model <model> --agent manager`) trong tmux window "Manager".
+1. Đọc `manager.json` → ghi tool config (`permission`) + agent definition (`agents/manager.md`) vào **tool dir của Manager** (`.opencode/` hoặc `.mimocode/`).
+2. Launch Manager (`<tool> --model <model> --agent manager`).
+3. **Worker chưa được setup.** Khi Manager tạo worker qua `tmux_controller.sh create`, script đó mới ghi config + agent cho worker từ `worker.json`.
 
 ## Cấu hình (`manager.json`, `worker.json`)
 
@@ -114,7 +114,7 @@ agent-teamwork/
 - Manager → `.mimocode/opencode.json` (tool=mimo) hoặc `.opencode/opencode.json` (tool=opencode)
 - Worker → `.mimocode/opencode.json` hoặc `.opencode/opencode.json` tùy tool
 
-`setup.sh` chỉ ghi config Manager. Khi Manager tạo worker qua `tmux_controller.sh create`, config worker **mới được ghi đè** lên file của tool worker **ngay trước khi launch worker**. Vì opencode/mimo chỉ **đọc config 1 lần lúc khởi động**, ghi đè này **không ảnh hưởng** process Manager đang chạy.
+`setup.sh` chỉ ghi config Manager. Khi Manager tạo worker qua `tmux_controller.sh create`, script đó mới ghi **tool config + agent definition** (`opencode.json` + `agents/worker.md`) của worker vào tool dir của worker từ `worker.json`, ngay trước khi launch worker. Vì opencode/mimo chỉ **đọc config 1 lần lúc khởi động**, ghi đè này **không ảnh hưởng** process Manager đang chạy.
 
 → **Sửa `worker.json` không đụng Manager**. Kể cả khi cả 2 dùng cùng 1 tool (vd cùng opencode): file chung là staging được ghi đè trước mỗi lần launch, process nào cũng chỉ đọc config lúc start.
 

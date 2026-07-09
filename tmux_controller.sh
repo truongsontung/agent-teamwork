@@ -12,6 +12,12 @@ write_worker_config() {
     mkdir -p "$dir"
     local perm=$(jq -c '.permission' worker.json 2>/dev/null)
     jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
+    # Sinh worker.md (agent definition) từ worker.json
+    local desc=$(jq -r '.description' worker.json 2>/dev/null)
+    local mode=$(jq -r '.mode' worker.json 2>/dev/null)
+    local prompt=$(jq -r '.prompt' worker.json 2>/dev/null)
+    mkdir -p "$dir/agents"
+    printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$desc" "$mode" "$prompt" > "$dir/agents/worker.md"
 }
 
 # Check session exists
