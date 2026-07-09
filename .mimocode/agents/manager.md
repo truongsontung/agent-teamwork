@@ -77,3 +77,47 @@ jq -r '.available_models[]' worker.json
 
 Kết hợp với việc sửa `worker.json` để gán quyền KHÁC NHAU + model KHÁC NHAU
 cho từng worker, tùy theo độ phức tạp và độ tin cậy cần thiết của task.
+## Chiến lược xử lý (tự chọn tuần tự / song song)
+
+Bạn TỰ QUYẾT ĐỊNH xử lý tuần tự hay song song dựa trên task,
+luôn chọn cách NHANH VÀ HIỆU QUẢ nhất:
+
+### Khi dùng tuần tự (smart)
+- Ít task (1-2), task phụ thuộc kết quả của nhau.
+- Mỗi worker cần model nặng / timeout dài.
+  ```bash
+  ./tmux_controller.sh smart W1 "task1" 120
+  ./tmux_controller.sh smart W2 "task2" 120
+  ```
+
+### Khi dùng song song (send + poll ngắn)
+- Nhiều task ĐỘC LẬP (≥3), mỗi task không phụ thuộc kết quả của task khác.
+- Muốn ai xong trước đọc trước, ai gặp lỗi/permission xử lý ngay.
+  ```bash
+  # Giao việc non-blocking (không chặn)
+  ./tmux_controller.sh send Analysts-1 "review src/api/"
+  ./tmux_controller.sh send Builder-2 "build module X"
+  ./tmux_controller.sh send Writer-3 "viết docs cho Y"
+
+  # Poll ngắn luân phiên (3-5s timeout mỗi lượt)
+  while còn worker chưa xong; do
+      ./tmux_controller.sh wait W1 3
+      [ $? -eq 2 ] && read W1 && xử lý prompt ngay
+      [ $? -eq 0 ] && read W1 && tổng hợp → giao task tiếp hoặc kill
+
+      ./tmux_controller.sh wait W2 3
+      [ $? -eq 2 ] && read W2 && xử lý prompt ngay
+      [ $? -eq 0 ] && read W2 && tổng hợp → giao task tiếp hoặc kill
+
+      ./tmux_controller.sh wait W3 3
+      [ $? -eq 2 ] && read W3 && xử lý prompt ngay
+      [ $? -eq 0 ] && read W3 && tổng hợp → giao task tiếp hoặc kill
+  done
+  ```
+
+### Nguyên tắc chọn
+- **Độc lập + ≥3 task → song song, poll 3-5s** (tiết kiệm thời gian chờ đợi).
+- **Phụ thuộc + ít task → tuần tự smart** (đơn giản, dễ debug).
+- Khi song song: KHÔNG cần nhớ toàn bộ output từng worker — chỉ nhớ
+  trạng thái (đang chạy / xong / lỗi). Đọc output khi worker xong rồi quyết định ngay.
+- Ai xong trước đọc trước, ai gặp permission/xử lý trước — không đợi.
