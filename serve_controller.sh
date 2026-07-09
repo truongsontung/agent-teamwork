@@ -4,12 +4,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_DIR="$SCRIPT_DIR/.worker"
-WK="$SCRIPT_DIR/worker.json"
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+STATE_DIR="$PROJECT_DIR/.worker"
+WK="${AGENT_TEAMWORK_HOME:-$SCRIPT_DIR}/worker.json"
 PORT_BASE=$(jq -r '.port_base // 4091' "$WK" 2>/dev/null)
 DEFAULT_TIMEOUT=$(jq -r '.timeout // 300' "$WK" 2>/dev/null)
 DEFAULT_MODEL=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$WK" 2>/dev/null)
-PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 BOT_LOG="$STATE_DIR/bot.log"
 
 # ── Helpers ──────────────────────────────────────────────
