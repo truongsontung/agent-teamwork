@@ -42,6 +42,20 @@ function setStatus(name: string, st: string) {
   if (w) w.status = st
   try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
   require("fs").writeFileSync(statusPath(name), st)
+  writeStatusLog()
+}
+
+function writeStatusLog() {
+  const lines: string[] = []
+  const now = new Date().toLocaleTimeString()
+  for (const [n, w] of workers) {
+    const extra = w.pendingPermission ? ` perm:${w.pendingPermission}` : ""
+    lines.push(`${now} ${n}=${w.status}${extra}`)
+  }
+  if (lines.length > 0) {
+    try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
+    require("fs").writeFileSync(`${statusDir}/status.log`, lines.join("\n") + "\n")
+  }
 }
 
 // ── Port allocation ─────────────────────────────────────
