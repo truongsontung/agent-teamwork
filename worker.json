@@ -1,5 +1,4 @@
 {
-  "tool": "opencode",
   "model": "opencode/deepseek-v4-flash-free",
   "max_workers": 5,
   "port_base": 4091,
@@ -27,8 +26,5 @@
       "/root/*": "allow",
       "/opt/*": "allow"
     }
-  },
-  "description": "Worker - thực thi lệnh từ Manager",
-  "mode": "primary",
-  "prompt": "Bạn là Worker. Chỉ thực thi lệnh từ Manager. Không tự quyết định. Không hỏi user."
+  }
 }
