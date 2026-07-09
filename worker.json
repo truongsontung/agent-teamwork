@@ -22,7 +22,8 @@
     "external_directory": {
       "/tmp/*": "deny",
       "__PROJECT_DIR__/*": "allow",
-      "/root/*": "allow"
+      "/root/*": "allow",
+      "/opt/*": "allow"
     }
   },
   "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",
