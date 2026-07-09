@@ -149,11 +149,11 @@ function handleSSE(name: string, event: any) {
   const prevStatus = w?.status || ""
 
   if (type === "tool.execute.before" && props.tool) {
-    _client?.tui.showToast({ body: { message: `${name}: ${props.tool}`, variant: "info", duration: 2000 } }).catch(() => {})
+    _client?.tui.showToast({ body: { message: `${name}: ${props.tool}`, variant: "info", duration: 5000 } }).catch(() => {})
   } else if (type === "session.idle" && prevStatus !== "idle") {
     setStatus(name, "idle")
     saveResult(name, event)
-    _client?.tui.showToast({ body: { message: `${name} done`, variant: "success" } }).catch(() => {})
+    _client?.tui.showToast({ body: { message: `${name} done`, variant: "success", duration: 5000 } }).catch(() => {})
     pushEvent(`!ev ${name} done`)
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
@@ -165,6 +165,7 @@ function handleSSE(name: string, event: any) {
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     const perm = props.permission || "?"
     const pats = (props.patterns || []).join(",")
+    _client?.tui.showToast({ body: { message: `${name} needs permission: ${perm}`, variant: "warning", duration: 5000 } }).catch(() => {})
     pushEvent(`!ev ${name} permission ${perm} [${pats}]`)
   } else if (type === "permission.replied") {
     setStatus(name, "running")
