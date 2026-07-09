@@ -18,6 +18,7 @@ mgr_mode=$(jq -r '.mode' "$MGR")
 mgr_prompt=$(jq -r '.prompt' "$MGR")
 
 mgr_perm="${mgr_perm//__PROJECT_DIR__/$PROJECT_DIR}"
+mgr_perm="${mgr_perm//__AGENT_HOME__/$SCRIPT_DIR}"
 mgr_perm=$(echo "$mgr_perm" | jq --arg d "$SCRIPT_DIR" '.external_directory[$d + "/*"] = "allow"')
 mgr_prompt="${mgr_prompt//__AGENT_HOME__/$SCRIPT_DIR}"
 
