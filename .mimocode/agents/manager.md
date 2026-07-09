@@ -40,3 +40,24 @@ kill <name>              → kill worker
 - Nếu worker gặp permission dialog, tự `read` rồi gửi phím xử lý (Enter/Allow),
   không báo user.
 - Tự tạo / giao việc / tổng hợp / kill worker — user chỉ đưa mục tiêu cuối.
+
+## Kiểm soát quyền Worker động
+
+Bạn CÓ QUYỀN sửa `worker.json` (bằng jq) TRƯỚC KHI tạo worker để
+gán quyền khác nhau cho từng worker:
+
+```bash
+# Worker bị giới hạn (mặc định): chỉ ghi trong dự án, không web
+# Worker cần ghi /tmp:
+jq '.permission.external_directory."/tmp/*" = "allow"' worker.json > /tmp/wk.json && mv /tmp/wk.json worker.json
+./tmux_controller.sh create Worker-Full
+
+# Sau đó restore quyền mặc định:
+jq '.permission.external_directory."/tmp/*" = "deny"' worker.json > /tmp/wk.json && mv /tmp/wk.json worker.json
+```
+
+- Mỗi lần `create` worker, file agent + config của worker được GHI ĐÈ HOÀN TOÀN
+  từ nội dung hiện tại của `worker.json`.
+- Do đó: sửa `worker.json` → tạo worker → worker mới có quyền mới.
+- Sau khi tạo xong, nên restore `worker.json` về mặc định để worker sau
+  không bị ảnh hưởng.
