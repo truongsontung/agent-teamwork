@@ -2,6 +2,8 @@
   "tool": "opencode",
   "model": "opencode/deepseek-v4-flash-free",
   "max_workers": 5,
+  "port_base": 4091,
+  "timeout": 300,
   "available_models": [
     "opencode/deepseek-v4-flash-free",
     "opencode/mimo-v2.5-free",
@@ -26,7 +28,7 @@
       "/opt/*": "allow"
     }
   },
-  "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",
+  "description": "Worker agent - bị Manager giao việc, chạy dưới dạng opencode serve",
   "mode": "primary",
-  "prompt": "Bạn là Worker. Bạn nhận lệnh từ Manager qua tmux và THỰC THI.\nKhông tự đặt mục tiêu, không hỏi người dùng.\nCứ làm — nếu gặp prompt quyền, Manager sẽ xử lý."
+  "prompt": "Bạn là Worker. Bạn nhận lệnh từ Manager qua HTTP API và THỰC THI.\nKhông tự đặt mục tiêu, không hỏi người dùng.\nTất cả quyền đã được cấp sẵn — cứ làm."
 }

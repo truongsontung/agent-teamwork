@@ -1,215 +1,119 @@
-# Agent Teamwork
+# Agent Teamwork — opencode serve workers
 
-Hệ thống quản lý nhiều AI agent (opencode / mimo) qua tmux. Một **Manager** agent điều khiển các **Worker** agents chạy song song, mỗi worker trong một tmux window riêng.
+Hệ thống Manager → Worker qua **REST HTTP API + SSE event monitor**.
 
-## Yêu cầu
+- **Manager**: opencode TUI (tmux window), nhận task từ user, phân rã, điều phối worker
+- **Workers**: `opencode serve` processes trên port riêng, mỗi worker = 1 context biệt lập
+- **Daemon**: 1 process thống nhất, chạy ngầm:
+  - **Manager permission**: auto-Enter (screen capture tmux)
+  - **Worker events**: SSE monitor → ghi file `.worker/<name>.status`
+  - **Worker permission**: báo Manager qua status file → Manager quyết định allow/deny
+  - **Cleanup**: khi Manager tắt hoặc Ctrl+C → kill workers + xoá `.worker/`
 
-- tmux 3.4+
-- jq
-- opencode và/hoặc mimo
-
-## Cấu trúc
+## Kiến trúc
 
 ```
-agent-teamwork/
-├── manager.json              ← Cấu hình Manager (tool, model, permission, prompt, ...)
-├── worker.json               ← Cấu hình Worker  (tool, model, max_workers, permission, prompt, ...)
-├── setup.sh                  ← Khởi tạo session, sinh tool config + agent def, launch Manager
-├── tmux_controller.sh        ← Điều khiển workers qua tmux (API)
-├── manager.sh                ← Script quản lý workers (cùng API với controller)
-├── tests/                    ← Unit tests
-├── test_agent_teamwork.sh    ← Integration test suite
-└── README.md
+setup.sh
+├── Manager (tmux window, opencode TUI)
+│   └── permission: bot auto-Enter (screen capture)
+│
+├── Daemon (1 process, background)
+│   ├── Subprocess: serve_controller.sh bot
+│   │   └── 1 SSE monitor/worker → ghi status files
+│   ├── Loop: check Manager alive + auto-Enter permission
+│   └── On Manager exit: kill workers → rm .worker/ → exit
+│
+└── Workers (opencode serve :4091, :4092, ...)
+    ├── /session/:id/message     ← Manager gửi task (HTTP POST)
+    ├── /session/:id/permissions ← Manager allow/deny
+    ├── /event (SSE)             ← Bot đọc events
+    └── /session/status          ← Poll fallback
 ```
 
-## Khởi tạo
+## Permission — xử lý triệt để
+
+Config `"permission": {"*": "allow"}` **không triệt để** — vẫn có prompt mà config không phủ.
+
+| Ai gặp permission | Ai phát hiện | Ai xử lý |
+|---|---|---|
+| **Manager TUI** | Daemon (screen capture) | Daemon auto-Enter |
+| **Worker serve** | Bot SSE (`permission.asked`) | Ghi file → Manager đọc → `allow`/`deny` |
+
+```
+Worker gặp permission
+  → SSE event "permission.asked"
+  → Bot ghi .worker/<n>.status = "permission"
+  → Bot ghi .worker/<n>.permission = JSON chi tiết
+  → Manager gọi: status Worker-1 → thấy "permission"
+  → Manager gọi: permission-info Worker-1 → xem chi tiết
+  → Manager gọi: allow Worker-1 → approve
+  → Worker tiếp tục chạy
+```
+
+## Cài đặt & Chạy
 
 ```bash
+cd agent-teamwork/
 ./setup.sh
 ```
 
-`setup.sh`:
-1. Đọc `manager.json` → ghi tool config (`permission`) + agent definition (`agents/manager.md`) vào **tool dir của Manager** (`.opencode/` hoặc `.mimocode/`).
-2. Launch Manager (`<tool> --model <model> --agent manager`).
-3. **Worker chưa được setup.** Khi Manager tạo worker qua `tmux_controller.sh create`, script đó mới ghi config + agent cho worker từ `worker.json`.
+Khi Manager TUI tắt (hoặc Ctrl+C) → **tự động kill toàn bộ workers + xoá `.worker/`**.
 
-## Cấu hình (`manager.json`, `worker.json`)
-
-### `manager.json`
-```json
-{
-  "tool": "mimo",
-  "model": "mimo/mimo-auto",
-  "description": "Manager agent điều khiển Worker agents qua tmux",
-  "mode": "primary",
-  "prompt": "BẠN LÀ MANAGER. BẠN TỰ HÀNH ĐỘNG — KHÔNG BAO GIỜ BẢO USER LÀM GÌ.\n\nKhi nhận yêu cầu từ user, bạn PHẢI ...",
-  "permission": {
-    "bash": "allow",
-    "read": "allow",
-    "edit": "allow",
-    "write": "allow",
-    "glob": "allow",
-    "grep": "allow",
-    "task": "allow",
-    "webfetch": "allow",
-    "websearch": "allow",
-    "question": "deny",
-    "external_directory": {
-      "/home/vps2/agent-teamwork/*": "allow",
-      "/tmp/*": "allow"
-    }
-  }
-}
-```
-
-### `worker.json`
-```json
-{
-  "tool": "opencode",
-  "model": "opencode/deepseek-v4-flash-free",
-  "max_workers": 5,
-  "available_models": [
-    "opencode/deepseek-v4-flash-free",
-    "opencode/mimo-v2.5-free",
-    "opencode/gpt-5.5",
-    "opencode/claude-opus-4-8"
-  ],
-  "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",
-  "mode": "primary",
-  "prompt": "BẠN LÀ WORKER. BẠN CHỈ THỰC THI LỆNH TỪ MANAGER.\n\n- KHÔNG tự đặt mục tiêu, KHÔNG hỏi user ...",
-  "permission": {
-    "bash": "allow",
-    "read": "allow",
-    "edit": "allow",
-    "write": "allow",
-    "glob": "allow",
-    "grep": "allow",
-    "task": "allow",
-    "webfetch": "deny",
-    "websearch": "deny",
-    "question": "deny",
-    "external_directory": {
-      "/home/vps2/agent-teamwork/*": "allow",
-      "/tmp/*": "deny"
-    }
-  }
-}
-```
-
-| Field | Mô tả |
-|-------|-------|
-| `tool` | Tool launch (`opencode` / `mimo`) |
-| `model` | Model cho agent đó |
-| `max_workers` | (_worker.json_) số worker tối đa |
-| `available_models` | (_worker.json_) danh sách model có thể chọn khi tạo worker |
-| `permission` | Quyền của tool (theo schema opencode/mimo), gồm `external_directory` |
-| `description` | Mô tả agent (ghi vào frontmatter của agent)` |
-| `mode` | Agent mode (`"primary"`) |
-| `prompt` | System prompt (thân prompt, ghi vào agent)` |
-
-## Tách biệt quyền Manager / Worker
-
-**Manager và Worker có file config riêng biệt**, không dùng chung:
-
-- Manager → `.mimocode/opencode.json` (tool=mimo) hoặc `.opencode/opencode.json` (tool=opencode)
-- Worker → `.mimocode/opencode.json` hoặc `.opencode/opencode.json` tùy tool
-
-`setup.sh` chỉ ghi config Manager. Khi Manager tạo worker qua `tmux_controller.sh create`, script đó mới ghi **tool config + agent definition** (`opencode.json` + `agents/worker.md`) của worker vào tool dir của worker từ `worker.json`, ngay trước khi launch worker. Vì opencode/mimo chỉ **đọc config 1 lần lúc khởi động**, ghi đè này **không ảnh hưởng** process Manager đang chạy.
-
-→ **Sửa `worker.json` không đụng Manager**. Kể cả khi cả 2 dùng cùng 1 tool (vd cùng opencode): file chung là staging được ghi đè trước mỗi lần launch, process nào cũng chỉ đọc config lúc start.
-
-## Tự động 100% (user ủy quyền tuyệt đối)
-
-- Tất cả quyền `allow`; `question: deny` (không bao giờ hỏi user).
-- `external_directory` phủ đúng scope (Manager rộng, worker hẹp), không prompt.
-- `tmux_controller.sh` `wait`/`smart` **không tự bấm Allow** permission prompt → trả exit code `2` để Manager quyết định.
-
-## API
-
-### Worker Management
+## API — serve_controller.sh
 
 ```bash
-# Tạo worker (tool + model từ worker.json; launch --agent worker)
-./tmux_controller.sh create Worker-1
-./tmux_controller.sh create Worker-2 opencode/mimo-v2.5-free  # custom model
+# Tạo worker
+./serve_controller.sh create Worker-1
+./serve_controller.sh create Worker-2 opencode/gpt-5.5
 
-# Kill worker
-./tmux_controller.sh kill Worker-1
+# Gửi task (NON-BLOCKING — khuyên dùng)
+./serve_controller.sh send-async Worker-1 "Review src/api/"
 
-# Lỗi khi trùng tên
-./tmux_controller.sh create Worker-1  # → Error: already exists
+# Kiểm tra trạng thái
+./serve_controller.sh status Worker-1        # idle|running|permission|error|dead
+./serve_controller.sh status-all
 
-# Lỗi khi worker không tồn tại
-./tmux_controller.sh kill NoWorker     # → Error: not found
+# Xem + xử lý permission
+./serve_controller.sh permission-info Worker-1
+./serve_controller.sh allow Worker-1
+./serve_controller.sh deny Worker-1
 
-# Lỗi khi quá max_workers
-# → Error: Max workers (5) reached
+# Đọc kết quả
+./serve_controller.sh result Worker-1        # text
+./serve_controller.sh result-full Worker-1   # full JSON
 
-# Lỗi khi chưa chạy setup
-# → Error: Session '...' not found. Run ./setup.sh first
+# Quản lý
+./serve_controller.sh dashboard
+./serve_controller.sh kill Worker-1
+./serve_controller.sh killall
 ```
 
-### Gửi lệnh, đọc output, dashboard
+## File trạng thái (`.worker/`)
 
-```bash
-./tmux_controller.sh send Worker-1 ls
-./tmux_controller.sh read Worker-1
-./tmux_controller.sh smart Worker-1 "npm run build" 120   # send + wait
-./tmux_controller.sh dashboard
-./manager.sh send-all "npm test"
+| File | Nội dung |
+|---|---|
+| `<name>.json` | Worker state (port, pid, model) |
+| `<name>.status` | idle / running / permission / error / dead |
+| `<name>.permission` | JSON chi tiết permission đang chờ |
+| `<name>.permission_id` | ID để gọi POST permissions |
+| `<name>.error` | JSON lỗi |
+| `<name>.sse_pid` | PID của SSE monitor |
+| `<name>.last_result` | Kết quả cuối cùng |
+| `configs/<name>.json` | Config riêng mỗi worker |
+| `daemon.pid` | PID của daemon |
+| `worker_bot.pid` | PID của worker bot |
+
+## Cấu trúc thư mục
+
 ```
-
-### Exit Codes (`wait` / `smart`)
-
-| Code | Ý nghĩa |
-|------|---------|
-| `0` | Worker hoàn thành (idle) |
-| `1` | Timeout |
-| `2` | Permission / Ask / Confirm prompt — Manager phải `read` và xử lý |
-
-`wait` / `smart` dùng `pipe-pane` pipe output worker ra file → phát hiện activity qua file size thay vì `sleep` + `capture-pane` liên tục. Chỉ gọi `capture-pane` khi có output mới, giảm ~6x lần capture so với polling 0.5s.
-
-### Interactive Mode
-
-```bash
-./tmux_controller.sh interactive
-# Controller> send Worker-1 npm install
-# Controller> dashboard
-# Controller> quit
+agent-teamwork/
+├── manager.json              ← Manager config + prompt
+├── worker.json               ← Worker config + serve params
+├── serve_controller.sh       ← Controller chính (REST + SSE)
+├── setup.sh                  ← Khởi tạo + Manager TUI + Daemon
+├── tmux_controller.sh        ← (legacy) tmux-based controller
+├── manager.sh                ← (legacy) tmux-based manager
+├── .worker/                  ← State dir (tự tạo, tự xoá khi exit)
+├── tests/
+└── README.md
 ```
-
-## Workflow
-
-Manager là một AI agent trong window "Manager". Prompt (field `prompt` trong `manager.json`) hướng dẫn nó dùng `./tmux_controller.sh` để tạo workers, gửi lệnh, đọc kết quả. Manager tự hành động, không hỏi user.
-
-```bash
-# Manager tự tạo worker, giao task, đọc kết quả
-./tmux_controller.sh create Reviewer-1
-./tmux_controller.sh smart Reviewer-1 "Review src/api/" 120
-./tmux_controller.sh read Reviewer-1
-./tmux_controller.sh dashboard
-```
-
-## Testing
-
-```bash
-bash tests/test_unit_manager.sh           # 42 tests, mock tmux/jq
-bash tests/test_unit_tmux_controller.sh   # 51 tests, mock tmux/jq
-./test_agent_teamwork.sh                  # integration tests (cần tmux)
-./test_agent_teamwork.sh -v               # verbose
-```
-
-## Biến môi trường
-
-| Biến | Mô tả |
-|------|-------|
-| `SESSION_NAME` | Ghi đè tên tmux session (do `setup.sh` export) |
-
-## Troubleshooting
-
-| Vấn đề | Giải pháp |
-|--------|-----------|
-| `jq: command not found` | `sudo apt install jq` |
-| `./setup.sh` không tạo được session | `tmux kill-session -t agent-session` rồi chạy lại |
-| Worker không nhận lệnh | `./tmux_controller.sh dashboard` |
-| `set-hook: invalid option` | tmux 3.4 không có hook đó — dùng stability detection |
