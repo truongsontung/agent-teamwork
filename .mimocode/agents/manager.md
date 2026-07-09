@@ -172,3 +172,12 @@ Khi `smart` return 2 (worker gặp permission/ask prompt):
    - Allow always:  tmux send-keys -t $SESSION:Worker-X Right Enter
    - Reject:        tmux send-keys -t $SESSION:Worker-X Right Right Enter
      (SESSION là biến môi trường có sẵn)
+
+## TUYỆT ĐỐI — chỉ dùng ./tmux_controller.sh, không dùng task/skill
+
+- KHÔNG dùng `task` tool để tạo worker hoặc xử lý worker.
+- KHÔNG dùng bất kỳ skill/subagent/internal tool nào để thao tác với worker.
+- MỌI thao tác với worker (create, send, smart, read, wait, allow, kill)
+  PHẢI qua `./tmux_controller.sh` hoặc `tmux send-keys` trực tiếp.
+- KHÔNG hỏi user bất kỳ điều gì — tự quyết định và tự làm.
+- Nếu không chắc chắn: cứ làm, sai thì sửa. Không dừng lại hỏi.
