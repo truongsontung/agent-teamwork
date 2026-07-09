@@ -74,33 +74,42 @@ monitor_worker() {
 
     curl -s -N --no-buffer "http://127.0.0.1:$port/event" 2>/dev/null | while IFS= read -r line; do
 
-        if [[ "$line" == event:* ]]; then
-            local et="${line#event: }" data=""
-            read -r dl; [[ "$dl" == data:* ]] && data="${dl#data: }"
+        # Format: data: {"type":"...","properties":{...}}
+        local json=""
+        if [[ "$line" == data:* ]]; then
+            json="${line#data: }"
         elif echo "$line" | jq -e '.type' >/dev/null 2>&1; then
-            local et=$(echo "$line" | jq -r '.type') data="$line"
+            json="$line"
         else
             continue
         fi
+
+        local et
+        et=$(echo "$json" | jq -r '.type // empty' 2>/dev/null)
+        [ -z "$et" ] && continue
 
         case "$et" in
             "session.idle")
                 echo "idle" > "$sf"; log "event $name idle" ;;
             "session.error")
-                echo "error" > "$sf"; echo "$data" > "$STATE_DIR/${name}.error"
+                echo "error" > "$sf"; echo "$json" > "$STATE_DIR/${name}.error"
                 log "event $name error" ;;
             "permission.asked")
-                echo "permission" > "$sf"; echo "$data" > "$pf"
-                local pid=$(echo "$data" | jq -r '.permissionID // .id // "?"' 2>/dev/null)
+                echo "permission" > "$sf"
+                echo "$json" > "$pf"
+                local pid=$(echo "$json" | jq -r '.properties.id // "?"' 2>/dev/null)
                 echo "$pid" > "$STATE_DIR/${name}.permission_id"
-                local tl=$(echo "$data" | jq -r '.tool // "?"' 2>/dev/null)
-                log "event $name permission tool=$tl id=$pid" ;;
+                local ptype=$(echo "$json" | jq -r '.properties.permission // "?"' 2>/dev/null)
+                log "event $name permission type=$ptype id=$pid" ;;
             "permission.replied")
                 echo "running" > "$sf"; rm -f "$pf" "$STATE_DIR/${name}.permission_id"
                 log "event $name perm_resolved" ;;
             "session.status")
-                local s=$(echo "$data" | jq -r '.status // .sessionStatus // ""' 2>/dev/null)
-                [ -n "$s" ] && [ "$s" != "null" ] && echo "$s" > "$sf" ;;
+                local st=$(echo "$json" | jq -r '.properties.status.type // ""' 2>/dev/null)
+                case "$st" in
+                    "idle") echo "idle" > "$sf" ;;
+                    "busy") echo "running" > "$sf" ;;
+                esac ;;
             "session.created")
                 echo "running" > "$sf"; log "event $name created" ;;
         esac
@@ -137,10 +146,11 @@ cmd_deny() {
 
 cmd_permission_info() {
     [ -f "$STATE_DIR/${1}.permission" ] || die "no pending permission"
-    local tl=$(jq -r '.tool // "?"' "$STATE_DIR/${1}.permission" 2>/dev/null)
+    local pt=$(jq -r '.properties.permission // "?"' "$STATE_DIR/${1}.permission" 2>/dev/null)
     local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "?")
-    echo "tool=$tl id=$pid"
-    jq -r '.args // .command // ""' "$STATE_DIR/${1}.permission" 2>/dev/null | head -3
+    local pat=$(jq -r '.properties.patterns // [] | join(", ")' "$STATE_DIR/${1}.permission" 2>/dev/null)
+    echo "type=$pt id=$pid"
+    echo "patterns=$pat"
 }
 
 # ── Core Commands ────────────────────────────────────────
@@ -229,8 +239,11 @@ cmd_status() {
     alive "$name" 2>/dev/null || { echo "dead"; return; }
     local port=$(worker_port "$name" 2>/dev/null) sid=$(worker_sid "$name" 2>/dev/null)
     [ -z "$port" ] && { echo "?"; return; }
-    curl -s --max-time 5 "http://127.0.0.1:$port/session/status" \
-        | jq -r ".[\"$sid\"] // \"running\"" 2>/dev/null || echo "?"
+    local raw
+    raw=$(curl -s --max-time 5 "http://127.0.0.1:$port/session/status" 2>/dev/null)
+    local st=$(echo "$raw" | jq -r ".[\"$sid\"].type // .[\"$sid\"] // \"running\"" 2>/dev/null)
+    [ "$st" = "busy" ] && st="running"
+    echo "${st:-running}"
 }
 
 cmd_status_all() {
