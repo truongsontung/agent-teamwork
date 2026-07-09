@@ -116,8 +116,14 @@ async function pushEvent(msg: string) {
 
 async function monitorSSE(name: string, port: number) {
   while (true) {
+    // Check if worker process still alive
+    const w = workers.get(name)
+    if (!w) return
+    try { process.kill(w.pid, 0) } catch { setStatus(name, "dead"); return }
+
     try {
       const res = await fetch(`http://127.0.0.1:${port}/event`)
+      if (!res.ok) { await Bun.sleep(3000); continue }
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buf = ""
@@ -137,8 +143,9 @@ async function monitorSSE(name: string, port: number) {
         }
       }
     } catch {
-      await Bun.sleep(5000)
+      // reconnect
     }
+    await Bun.sleep(2000)
   }
 }
 
@@ -148,12 +155,9 @@ function handleSSE(name: string, event: any) {
   const w = workers.get(name)
   const prevStatus = w?.status || ""
 
-  if (type === "tool.execute.before" && props.tool) {
-    _client?.tui.showToast({ body: { message: `${name}: ${props.tool}`, variant: "info", duration: 5000 } }).catch(() => {})
-  } else if (type === "session.idle" && prevStatus !== "idle") {
+  if (type === "session.idle" && prevStatus !== "idle") {
     setStatus(name, "idle")
     saveResult(name, event)
-    _client?.tui.showToast({ body: { message: `${name} done`, variant: "success", duration: 5000 } }).catch(() => {})
     pushEvent(`!ev ${name} done`)
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
@@ -165,7 +169,6 @@ function handleSSE(name: string, event: any) {
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     const perm = props.permission || "?"
     const pats = (props.patterns || []).join(",")
-    _client?.tui.showToast({ body: { message: `${name} needs permission: ${perm}`, variant: "warning", duration: 5000 } }).catch(() => {})
     pushEvent(`!ev ${name} permission ${perm} [${pats}]`)
   } else if (type === "permission.replied") {
     setStatus(name, "running")
@@ -370,8 +373,25 @@ const toolDefs = {
 export const AgentTeamwork: Plugin = async ({ client, $ }) => {
   _client = client
 
+  // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
+  const fallback = setInterval(async () => {
+    for (const [name, w] of workers) {
+      if (w.status === "idle" || w.status === "dead" || w.status === "error") continue
+      try {
+        const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
+        const json = await res.json()
+        const st = json[w.sessionId]?.type
+        if (st === "idle" && w.status !== "idle") {
+          setStatus(name, "idle")
+          pushEvent(`!ev ${name} done`)
+        }
+      } catch {}
+    }
+  }, 10000)
+
   return {
     dispose: async () => {
+      clearInterval(fallback)
       const names = [...workers.keys()]
       for (const name of names) {
         const w = workers.get(name)!
