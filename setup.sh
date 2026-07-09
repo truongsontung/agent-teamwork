@@ -53,8 +53,7 @@ if tmux capture-pane -t "Manager" -p 2>/dev/null | grep -q "I trust this folder"
     tmux send-keys -t "Manager" Enter
 fi
 
-# Bot nền: theo dõi Manager, auto-Enter khi gặp permission prompt của chính Manager
-# (Worker prompt do Manager tự xử lý qua smart + allow)
+# Bot nền: auto-Enter permission prompt của Manager + dọn worker khi Manager thoát
 (
     while tmux has-session -t "$SESSION" 2>/dev/null; do
         screen=$(tmux capture-pane -t "$SESSION:Manager" -p 2>/dev/null)
@@ -62,6 +61,17 @@ fi
             tmux send-keys -t "$SESSION:Manager" Enter
         fi
         sleep 3
+    done
+) &
+
+# Bot dọn dẹp: khi cửa sổ Manager biến mất (user exit) -> kill tất cả worker
+(
+    while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
+        sleep 5
+    done
+    # Manager window gone -> kill all workers
+    tmux list-windows -t "$SESSION" -F '#{window_index} #{window_name}' 2>/dev/null | while read idx name; do
+        [ "$name" != "Manager" ] && tmux kill-window -t "$SESSION:$idx" 2>/dev/null
     done
 ) &
 echo "✓ Manager: tool $mgr_tool, model $mgr_model, project $PROJECT_DIR (bot permission ON)"
