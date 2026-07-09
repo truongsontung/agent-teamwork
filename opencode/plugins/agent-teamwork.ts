@@ -134,28 +134,28 @@ async function monitorSSE(name: string, port: number) {
 function handleSSE(name: string, event: any) {
   const type = event.type
   const props = event.properties || {}
+  const w = workers.get(name)
+  const prevStatus = w?.status || ""
 
-  if (type === "session.idle") {
+  if (type === "session.idle" && prevStatus !== "idle") {
     setStatus(name, "idle")
     saveResult(name, event)
     _client?.tui.appendPrompt({ body: { text: `!ev ${name} done` } }).catch(() => {})
-  } else if (type === "session.error") {
+  } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
     _client?.tui.appendPrompt({ body: { text: `!ev ${name} error` } }).catch(() => {})
-  } else if (type === "permission.asked") {
+  } else if (type === "permission.asked" && prevStatus !== "permission") {
     setStatus(name, "permission")
-    const w = workers.get(name)
     if (w) w.pendingPermission = props.id
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     _client?.tui.appendPrompt({ body: { text: `!ev ${name} permission` } }).catch(() => {})
   } else if (type === "permission.replied") {
     setStatus(name, "running")
-    const w = workers.get(name)
     if (w) w.pendingPermission = undefined
   } else if (type === "session.status") {
     const st = props.status?.type
-    if (st === "idle") setStatus(name, "idle")
-    else if (st === "busy") setStatus(name, "running")
+    if (st === "idle" && prevStatus !== "idle") setStatus(name, "idle")
+    else if (st === "busy" && prevStatus !== "running") setStatus(name, "running")
   }
 }
 
