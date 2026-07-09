@@ -15,7 +15,7 @@
     "write": "allow",
     "glob": "allow",
     "grep": "allow",
-    "task": "deny",
+    "task": "allow",
     "webfetch": "deny",
     "websearch": "deny",
     "question": "deny",
