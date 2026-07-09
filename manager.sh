@@ -61,8 +61,9 @@ create() {
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
     write_worker_config "$DEFAULT_TOOL"
-    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --agent worker --print-logs 2>./.worker-$name.log" Enter
-    echo "✓ $name created ($model, agent: worker, log: ./.worker-$name.log)"
+    mkdir -p ./.worker
+    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --agent worker --print-logs 2>./.worker/$name.log" Enter
+    echo "✓ $name created ($model, agent: worker, log: ./.worker/$name.log)"
 }
 
 # Send command
