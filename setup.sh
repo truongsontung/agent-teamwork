@@ -37,18 +37,6 @@ mgr_dir=$(dir_for "$mgr_tool")
 
 mkdir -p "$PROJECT_DIR/$mgr_dir"
 
-# opencode.json: chỉ external_directory (security), không permission
-jq -n --arg d "$SCRIPT_DIR" '{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "external_directory": {
-      ($d + "/.worker/*"): "deny",
-      ($d + "/*.sh"): "deny",
-      ($d + "/*.json"): "deny"
-    }
-  }
-}' > "$PROJECT_DIR/$mgr_dir/opencode.json"
-
 mkdir -p "$PROJECT_DIR/$mgr_dir/agents"
 
 # manager.md: permission trong frontmatter → deny hết tool trừ bash
