@@ -166,3 +166,9 @@ Khi `smart` return 2 (worker gặp permission/ask prompt):
    - Reject:        gửi Right Right rồi Enter
 4. Sau khi xử lý: `./tmux_controller.sh wait Worker-X 30` để worker tiếp tục.
 5. KHÔNG sửa worker.json — worker đã chạy, sửa không có tác dụng.
+
+3. Gửi phím (DÙNG tmux send-keys TRỰC TIẾP, không dùng send):
+   - Allow once:   ./tmux_controller.sh allow Worker-X       (Enter ngay)
+   - Allow always:  tmux send-keys -t $SESSION:Worker-X Right Enter
+   - Reject:        tmux send-keys -t $SESSION:Worker-X Right Right Enter
+     (SESSION là biến môi trường có sẵn)
