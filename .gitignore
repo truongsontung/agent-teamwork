@@ -1,29 +1,7 @@
-# Dependencies
 node_modules/
-
-# State files (runtime)
-shared/state/
-shared/messages/*.txt
-
-# Logs
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Agent runtime state
-.mimocode/*
-!.mimocode/agents/
-.opencode/*
-!.opencode/agents/
-
-# Temp
-tmp/
+.opencode/node_modules/
+.opencode/opencode.json
+.opencode/package.json
 .worker/
+.DS_Store
+*.log

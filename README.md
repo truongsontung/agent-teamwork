@@ -1,62 +1,70 @@
 # Agent Teamwork
 
-1 lệnh duy nhất. Manager TUI mở ngay terminal. Không tmux.
+1 lệnh. Plugin native. Manager điều phối worker ngay trong opencode TUI.
 
-## Dùng
-
-```bash
-# Clone 1 lần
-git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
-
-# Mỗi lần cần làm dự án:
+```
 cd ~/my-project
 ~/agent-teamwork/setup.sh
 ```
 
-Terminal của bạn trở thành Manager TUI ngay lập tức. Gõ task:
+## Kiến trúc
 
 ```
-Xây dựng hệ thống login JWT: backend API + bảng DB + form frontend
+┌─ Manager TUI ────────────────────────────────────────┐
+│  Plugin agent-teamwork.ts (380 dòng TypeScript)      │
+│  ├── worker_create / send / status / result          │
+│  ├── worker_allow / deny / kill / killall            │
+│  ├── SSE monitor per worker (real-time)              │
+│  ├── client.tui.appendPrompt() bắn !ev vào input     │
+│  └── dispose: kill workers khi exit                  │
+└──────────────────────────────────────────────────────┘
+         │ Bun.spawn          │ fetch / SSE
+         ▼                    ▼
+┌──────────────┐   ┌──────────────┐
+│ :4091 serve  │   │ :4092 serve  │   ...
+│ context: BE  │   │ context: FE  │
+└──────────────┘   └──────────────┘
 ```
 
-Manager tự phân rã → tạo worker → giao việc → gom kết quả → báo cáo.
+## Dùng
 
-**Bot chạy ngầm** giám sát worker, bắt sự kiện permission/idle/error. Manager dùng `./agent status` để đọc.
+```bash
+git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
+cd ~/my-project
+~/agent-teamwork/setup.sh
+```
 
-**Thoát:** nhấn Ctrl+C trong opencode TUI → bot dọn worker + xoá temp → exit.
+Gõ task cho Manager trong TUI:
+
+```
+Xây dựng login JWT: API backend + bảng DB + form frontend
+```
+
+Manager tự: `worker_create` 3 worker → `worker_send` song song → đợi `!ev done` → `worker_result` → `worker_killall`.
 
 ## Yêu cầu
 
-- `jq` `curl`
 - `opencode` trong PATH
+- `jq`
 
-```bash
-sudo apt install jq curl
-```
+## Sự kiện
 
-## Manager dùng gì
+Plugin bắn `!ev` vào input Manager khi worker đổi trạng thái:
 
-Manager thấy `./agent` trong project — black-box, không biết cài ở đâu:
+| Event | Manager làm gì |
+|---|---|
+| `!ev X done` | `worker_result X` |
+| `!ev X permission` | `worker_permission_info X` → `worker_allow X` |
+| `!ev X error` | `worker_status X` kiểm tra |
 
-```
-./agent create Worker-1          → +Worker-1
-./agent send-async Worker-1 ".." → +
-./agent status Worker-1          → idle
-./agent result Worker-1          → ...kết quả...
-./agent kill Worker-1            → -Worker-1
-```
-
-## Cấu hình
-
-Sửa `~/agent-teamwork/manager.json` (model, permission Manager) hoặc `worker.json` (model, max_workers, permission Worker) trước khi setup.
-
-## Cấu trúc sau setup
+## Cấu trúc thư mục
 
 ```
-~/agent-teamwork/          ← clone, không đụng
-~/my-project/              ← dự án
-├── agent                  ← wrapper (tự sinh/xoá)
-├── .worker/               ← state dir (tự sinh/xoá)
-├── .opencode/             ← config Manager (tự sinh, giữ lại)
-└── src/ ...               ← code của bạn
+agent-teamwork/
+├── manager.json            ← Prompt Manager
+├── worker.json             ← Config Worker (model, permission)
+├── setup.sh                ← 1 lệnh: copy plugin + viết agent + launch
+├── opencode/plugins/
+│   └── agent-teamwork.ts   ← TOÀN BỘ HỆ THỐNG (plugin native)
+└── README.md
 ```
