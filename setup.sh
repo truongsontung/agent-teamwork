@@ -63,17 +63,18 @@ fi
         fi
         sleep 3
     done
-    # Manager gone -> kill all workers
+    # Manager gone -> kill all workers + dọn log/status
     tmux list-windows -t "$SESSION" -F '#{window_index} #{window_name}' 2>/dev/null | while read idx name; do
         [ "$name" != "Manager" ] && tmux kill-window -t "$SESSION:$idx" 2>/dev/null
     done
+    rm -f /tmp/worker-*.log /tmp/worker-*.status
 ) &
 
 # Bot event worker: tail log file từng worker -> phát hiện asking/exiting -> ghi status
 (
     # Đợi ít nhất 1 log file xuất hiện
     sleep 5
-    while true; do
+    while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
         for log in /tmp/worker-*.log; do
             [ -f "$log" ] || continue
             worker=$(echo "$log" | sed 's|/tmp/worker-||; s|\.log||')
