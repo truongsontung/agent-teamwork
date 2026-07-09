@@ -29,9 +29,16 @@ mgr_dir=$(dir_for "$mgr_tool")
 # Ghi tool config + agent definition cho Manager vào PROJECT_DIR
 mkdir -p "$PROJECT_DIR/$mgr_dir"
 jq -n --argjson p "$mgr_perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$PROJECT_DIR/$mgr_dir/opencode.json"
+
+# Sinh agent md (cả manager.md + worker.md) — mimo scan TẤT CẢ file agents lúc start,
+# nếu worker.md hỏng/null thì crash. Worker.md sẽ bị ghi đè khi tạo worker thực tế.
 mkdir -p "$PROJECT_DIR/$mgr_dir/agents"
 printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$mgr_desc" "$mgr_mode" "$mgr_prompt" > "$PROJECT_DIR/$mgr_dir/agents/manager.md"
-echo "✓ manager -> $PROJECT_DIR/$mgr_dir/ (opencode.json + agents/manager.md)"
+
+WK="$SCRIPT_DIR/worker.json"
+wk_desc=$(jq -r '.description' "$WK"); wk_mode=$(jq -r '.mode' "$WK"); wk_prompt=$(jq -r '.prompt' "$WK")
+printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$wk_desc" "$wk_mode" "$wk_prompt" > "$PROJECT_DIR/$mgr_dir/agents/worker.md"
+echo "✓ manager -> $PROJECT_DIR/$mgr_dir/ (opencode.json + agents/manager.md + agents/worker.md)"
 
 # Launch Manager
 cd "$PROJECT_DIR"

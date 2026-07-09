@@ -20,7 +20,7 @@
     "websearch": "deny",
     "question": "deny",
     "external_directory": {
-      "/tmp/*": "deny",
+      "/tmp/*": "allow",
       "__PROJECT_DIR__/*": "allow"
     }
   },

@@ -21,8 +21,10 @@ write_worker_config() {
     local desc=$(jq -r '.description' "$WK" 2>/dev/null)
     local mode=$(jq -r '.mode' "$WK" 2>/dev/null)
     local prompt=$(jq -r '.prompt' "$WK" 2>/dev/null)
-    mkdir -p "$dir/agents"
-    printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$desc" "$mode" "$prompt" > "$dir/agents/worker.md"
+    if [ "$desc" != "null" ] && [ -n "$desc" ]; then
+        mkdir -p "$dir/agents"
+        printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$desc" "$mode" "$prompt" > "$dir/agents/worker.md"
+    fi
 }
 
 # Check session
