@@ -59,6 +59,18 @@ send() {
     tmux send-keys -t "$SESSION:$target" "$cmd" Enter
 }
 
+# Gửi phím Enter trực tiếp (dùng khi worker gặp permission prompt)
+# Không readiness check — prompt không có "Ask anything".
+allow() {
+    local target="$1"
+    check_session || return 1
+    if ! worker_exists "$target"; then
+        echo "Error: Target '$target' not found"
+        return 1
+    fi
+    tmux send-keys -t "$SESSION:$target" Enter
+}
+
 # Read screen
 read_screen() {
     local target="$1"
@@ -293,6 +305,10 @@ case "${1:-}" in
     smart)
         shift
         smart "$@"
+        ;;
+    allow)
+        shift
+        allow "$@"
         ;;
     create)
         shift

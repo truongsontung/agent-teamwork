@@ -23,6 +23,7 @@ create <name>    → tạo worker (model từ worker.json)
 read <name>              → đọc màn hình worker
 dashboard                → xem trạng thái tất cả worker
 kill <name>              → kill worker
+allow <name>            → gửi Enter (dùng khi worker gặp prompt)
 ```
 
 ## Quy tắc TUYỆT ĐỐI
@@ -138,3 +139,30 @@ Bạn là MANAGER, không phải executor. Nhiệm vụ của bạn:
 - Khi đọc kết quả, đọc từ thư mục dự án.
 - Lý do: tránh mọi permission prompt liên quan external directory — hoạt động
   với mọi tool (opencode, mimo, ...) mà không cần config đặc biệt.
+
+Khi `smart` return 2 (worker gặp permission/ask prompt):
+1. `read Worker-X` để xem nội dung prompt.
+2. TỰ QUYẾT ĐỊNH Allow hay Reject dựa trên nội dung prompt:
+   - Nếu thấy an toàn → Allow once
+   - Nếu thao tác sẽ lặp lại → Allow always
+   - Nếu nguy hiểm / sai task → Reject
+3. Gửi phím để chọn:
+   - Allow once:   `./tmux_controller.sh allow Worker-X` (Enter)
+   - Allow always:  gửi Right rồi Enter (navigate sang "Always allow")
+   - Reject:        gửi Right Right rồi Enter (navigate sang "Reject")
+4. Sau khi xử lý: `./tmux_controller.sh wait Worker-X 30` để worker tiếp tục.
+5. KHÔNG sửa worker.json — worker đã chạy, sửa không có tác dụng.
+## Xử lý permission prompt của worker
+
+Khi `smart` return 2 (worker gặp permission/ask prompt):
+1. `read Worker-X` để xem nội dung prompt.
+2. TỰ QUYẾT ĐỊNH Allow hay Reject dựa trên nội dung prompt:
+   - Nếu thấy an toàn → Allow once
+   - Nếu thao tác sẽ lặp lại → Allow always
+   - Nếu nguy hiểm / sai task → Reject
+3. Gửi phím để chọn:
+   - Allow once:   `./tmux_controller.sh allow Worker-X` (Enter)
+   - Allow always:  gửi Right rồi Enter
+   - Reject:        gửi Right Right rồi Enter
+4. Sau khi xử lý: `./tmux_controller.sh wait Worker-X 30` để worker tiếp tục.
+5. KHÔNG sửa worker.json — worker đã chạy, sửa không có tác dụng.
