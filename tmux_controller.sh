@@ -3,6 +3,17 @@
 
 SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null)}"
 
+# Ghi config của worker vào tool config dir TƯƠNG ỨNG, ngay trước khi launch.
+# Tool chỉ đọc config 1 lần lúc khởi động nên ghi đè này không ảnh hưởng
+# process Manager (nếu cùng tool) đang chạy.
+write_worker_config() {
+    local tool="$1"
+    local dir=$([ "$tool" = "opencode" ] && echo .opencode || echo .mimocode)
+    mkdir -p "$dir"
+    local perm=$(jq -c '.permission' worker.json 2>/dev/null)
+    jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
+}
+
 # Check session exists
 check_session() {
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -54,21 +65,10 @@ wait_prompt() {
     while true; do
         local screen=$(read_screen "$target")
         
-        # Auto-handle permission prompts
-        if echo "$screen" | grep -q "Permission required"; then
-            tmux send-keys -t "$SESSION:$target" Enter
-            sleep 1; continue
-        fi
-        
-        # Auto-confirm "Always allow"
-        if echo "$screen" | grep -q "Always allow"; then
-            tmux send-keys -t "$SESSION:$target" Enter
-            sleep 0.5; continue
-        fi
-        
-        # Opencode dialog detection — Manager agent tự xử lý
-        if echo "$screen" | grep -qE '△\s*(Ask|Confirm|Question)'; then
-            sleep 0.5; continue
+        # Worker bị giới hạn quyền: KHÔNG auto-allow (sẽ bypass quyền).
+        # Phát hiện prompt quyền / hỏi -> trả 2 để Manager tự xử lý.
+        if echo "$screen" | grep -qE "Permission required|Always allow|△\s*(Ask|Confirm|Question)"; then
+            return 2
         fi
         
         # Check for opencode idle state (ctrl+p hint = idle)
@@ -121,8 +121,8 @@ worker_exists() {
 # Create worker with validation
 create_worker() {
     local name="$1"
-    local model="${2:-$(jq -r '.workers.default_model' config.json 2>/dev/null || echo 'opencode/deepseek-v4-flash-free')}"
-    local tool=$(jq -r '.workers.tool // "opencode"' config.json 2>/dev/null)
+    local model="${2:-$(jq -r '.model' worker.json 2>/dev/null || echo 'opencode/deepseek-v4-flash-free')}"
+    local tool=$(jq -r '.tool // "opencode"' worker.json 2>/dev/null)
     
     check_session || return 1
     
@@ -133,7 +133,7 @@ create_worker() {
     fi
     
     # Check max workers (count all windows except Manager)
-    local max=$(jq -r '.max_workers' config.json 2>/dev/null || echo 5)
+    local max=$(jq -r '.max_workers' worker.json 2>/dev/null || echo 5)
     local current=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -v "Manager" | wc -l | tr -d ' ')
     if [ "$current" -ge "$max" ]; then
         echo "Error: Max workers ($max) reached"
@@ -141,8 +141,10 @@ create_worker() {
     fi
     
     tmux new-window -t "$SESSION:" -n "$name"
-    send "$name" "$tool --model $model"
-    echo "✓ Worker $name created ($model)"
+    tmux set-window-option -t "$SESSION:$name" allow-rename off
+    write_worker_config "$tool"
+    send "$name" "$tool --model $model --agent worker"
+    echo "✓ Worker $name created ($model, agent: worker)"
 }
 
 # Kill worker with validation

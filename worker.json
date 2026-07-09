@@ -1,0 +1,27 @@
+{
+  "tool": "opencode",
+  "model": "opencode/deepseek-v4-flash-free",
+  "max_workers": 5,
+  "available_models": [
+    "opencode/deepseek-v4-flash-free",
+    "opencode/mimo-v2.5-free",
+    "opencode/gpt-5.5",
+    "opencode/claude-opus-4-8"
+  ],
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "write": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "task": "allow",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "question": "deny",
+    "external_directory": {
+      "/home/vps2/agent-teamwork/*": "allow",
+      "/tmp/*": "deny"
+    }
+  }
+}

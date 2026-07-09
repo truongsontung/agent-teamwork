@@ -117,7 +117,7 @@ tmux() {
 # Mock jq
 jq() {
     case "$2" in
-        config.json)
+        worker.json)
             case "$1" in
                 *max_workers*)
                     echo "$MOCK_MAX_WORKERS"
@@ -133,7 +133,7 @@ jq() {
 # Source manager functions
 source_manager() {
     SESSION="test-session"
-    CONFIG="config.json"
+    CONFIG="worker.json"
     MAX_WORKERS=$MOCK_MAX_WORKERS
     DEFAULT_MODEL=$MOCK_DEFAULT_MODEL
 

@@ -2,10 +2,21 @@
 # Manager Agent - Control multiple workers
 
 SESSION="${SESSION_NAME:-$(tmux display-message -p '#{session_name}' 2>/dev/null)}"
-CONFIG="config.json"
-MAX_WORKERS=$(jq -r '.max_workers // 5' "$CONFIG" 2>/dev/null)
-DEFAULT_MODEL=$(jq -r '.workers.default_model // "opencode/deepseek-v4-flash-free"' "$CONFIG" 2>/dev/null)
-DEFAULT_TOOL=$(jq -r '.workers.tool // "opencode"' "$CONFIG" 2>/dev/null)
+WK="worker.json"
+MAX_WORKERS=$(jq -r '.max_workers // 5' "$WK" 2>/dev/null)
+DEFAULT_MODEL=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$WK" 2>/dev/null)
+DEFAULT_TOOL=$(jq -r '.tool // "opencode"' "$WK" 2>/dev/null)
+
+# Ghi config worker vào tool config dir TƯƠNG ỨNG, ngay trước khi launch.
+# Tool chỉ đọc config 1 lần lúc khởi động nên ghi đè này không ảnh hưởng
+# process Manager (nếu cùng tool) đang chạy.
+write_worker_config() {
+    local tool="$1"
+    local dir=$([ "$tool" = "opencode" ] && echo .opencode || echo .mimocode)
+    mkdir -p "$dir"
+    local perm=$(jq -c '.permission' worker.json 2>/dev/null)
+    jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
+}
 
 # Check session
 check_session() {
@@ -39,8 +50,10 @@ create() {
     fi
     
     tmux new-window -t "$SESSION:" -n "$name"
-    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model" Enter
-    echo "✓ $name created ($model)"
+    tmux set-window-option -t "$SESSION:$name" allow-rename off
+    write_worker_config "$DEFAULT_TOOL"
+    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --agent worker" Enter
+    echo "✓ $name created ($model, agent: worker)"
 }
 
 # Send command

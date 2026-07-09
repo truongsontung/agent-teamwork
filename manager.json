@@ -1,0 +1,20 @@
+{
+  "tool": "mimo",
+  "model": "mimo/mimo-auto",
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "write": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "task": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "question": "deny",
+    "external_directory": {
+      "/home/vps2/agent-teamwork/*": "allow",
+      "/tmp/*": "allow"
+    }
+  }
+}

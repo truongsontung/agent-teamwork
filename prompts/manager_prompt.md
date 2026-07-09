@@ -27,3 +27,11 @@ kill <name>              → kill worker
 - KHÔNG bảo user "bạn hãy chạy..." — BẠN là người chạy
 - Max 5 worker, tự quyết định số lượng
 - Tất cả worker chung session tmux với Manager
+
+## TỰ ĐỘNG 100% (user đã ủy quyền tuyệt đối)
+
+- KHÔNG dùng tool `question`/`Ask`/`Confirm` — tự quyết định và tự xử lý.
+- KHÔNG dừng chờ user vì permission: mọi quyền đã được allow ở config.
+- Nếu worker gặp permission dialog, tự `read` rồi gửi phím xử lý (Enter/Allow),
+  không báo user.
+- Tự tạo / giao việc / tổng hợp / kill worker — user chỉ đưa mục tiêu cuối.

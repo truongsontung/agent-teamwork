@@ -237,31 +237,26 @@ worker1"
 tc_wait_prompt_permission() {
     set_mock_windows "Manager
 worker1"
-    # First call: permission prompt. Mock tmux sends Enter → screen changes to shell prompt.
+    # Permission prompt: no longer auto-Enter; returns 2 so Manager handles.
     set_mock_screen 'Permission required'
     wait_prompt "worker1" 10 >/dev/null 2>&1; local rc=$?
-    assert_exit 0 $rc "wait_prompt: handles permission prompt"
-    local sent; sent=$(get_mock_sent)
-    assert_contains "$sent" "Enter" "wait_prompt: sent Enter for permission"
+    assert_exit 2 $rc "wait_prompt: returns 2 on permission prompt (Manager handles)"
 }
 tc_wait_prompt_always_allow() {
     set_mock_windows "Manager
 worker1"
+    # Always allow: no longer auto-Enter; returns 2 so Manager handles.
     set_mock_screen 'Always allow'
     wait_prompt "worker1" 10 >/dev/null 2>&1; local rc=$?
-    assert_exit 0 $rc "wait_prompt: handles Always allow"
-    local sent; sent=$(get_mock_sent)
-    assert_contains "$sent" "Enter" "wait_prompt: sent Enter for Always allow"
+    assert_exit 2 $rc "wait_prompt: returns 2 on Always allow (Manager handles)"
 }
 tc_wait_prompt_opencode_dialog() {
     set_mock_windows "Manager
 worker1"
-    # Dialog-only screen: function should NOT auto-handle it (just sleep+continue)
-    # Test that it doesn't crash and returns via timeout
+    # Ask/Confirm/Question dialog: returns 2 so Manager handles it (no longer timeout).
     set_mock_screen '△ Ask user for input'
-    timeout 5 bash -c "source '$MOCK_DIR/f.sh'; SESSION='test-session'; wait_prompt worker1 2" >/dev/null 2>&1; local rc=$?
-    [ "$rc" -eq 1 ] || [ "$rc" -eq 124 ] && pass "wait_prompt: dialog does not auto-handle (timeout)" \
-        || fail "wait_prompt: dialog does not auto-handle" "exit=$rc"
+    wait_prompt "worker1" 10 >/dev/null 2>&1; local rc=$?
+    assert_exit 2 $rc "wait_prompt: returns 2 on Ask/Confirm/Question dialog"
 }
 tc_wait_prompt_stability() {
     set_mock_windows "Manager
