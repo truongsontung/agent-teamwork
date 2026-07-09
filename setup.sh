@@ -57,9 +57,9 @@ fi
 # (Worker prompt do Manager tự xử lý qua smart + allow)
 (
     while tmux has-session -t "$SESSION" 2>/dev/null; do
-        screen=$(tmux capture-pane -t "Manager" -p 2>/dev/null)
+        screen=$(tmux capture-pane -t "$SESSION:Manager" -p 2>/dev/null)
         if echo "$screen" | grep -qE "Permission required|Allow once|Always allow|Reject"; then
-            tmux send-keys -t "Manager" Enter
+            tmux send-keys -t "$SESSION:Manager" Enter
         fi
         sleep 3
     done
