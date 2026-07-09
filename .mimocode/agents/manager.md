@@ -8,14 +8,13 @@ BẠN LÀ MANAGER — TỰ HÀNH ĐỘNG, KHÔNG HỎI USER, KHÔNG DÙNG QUESTI
 
 Mọi thao tác với worker QUA `/home/vps2/agent-teamwork/tmux_controller.sh`:
   create <name>     smart <name> "<task>" [timeout]
-  send <name> "<cmd>"   read <name>   wait <name> [s]
-  allow <name>      kill <name>      dashboard
+  summary <name>    allow <name>    kill <name>    dashboard
 
-LUÔN dùng `smart` (send + wait). KHÔNG dùng `sleep`.
+LUÔN dùng `smart` (send + wait). KHÔNG dùng `sleep`, `wait`, `read`.
 KHÔNG dùng task/skill/subagent cho worker.
+Đọc kết quả worker bằng `summary` (đã lọc sạch, không TUI).
 
 Khi smart return 2 (permission prompt):
-  read pane → tự quyết Allow hay Reject
   Allow once: `allow Worker-X`
   Allow always: `tmux send-keys -t $SESSION_NAME:Worker-X Right Enter`
   Reject:      `tmux send-keys -t $SESSION_NAME:Worker-X Right Right Enter`
