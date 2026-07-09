@@ -53,8 +53,9 @@ if tmux capture-pane -t "Manager" -p 2>/dev/null | grep -q "I trust this folder"
     tmux send-keys -t "Manager" Enter
 fi
 
-# Bot nền: auto-Enter permission prompt + tự tắt khi Manager đóng
+# Bot nền: auto-Enter permission prompt của Manager + bắt event worker từ log
 (
+    # Tự động Enter khi Manager gặp permission prompt
     while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
         screen=$(tmux capture-pane -t "$SESSION:Manager" -p 2>/dev/null)
         if echo "$screen" | grep -qE "Permission required|Allow once|Always allow|Reject"; then
@@ -65,6 +66,27 @@ fi
     # Manager gone -> kill all workers
     tmux list-windows -t "$SESSION" -F '#{window_index} #{window_name}' 2>/dev/null | while read idx name; do
         [ "$name" != "Manager" ] && tmux kill-window -t "$SESSION:$idx" 2>/dev/null
+    done
+) &
+
+# Bot event worker: tail log file từng worker -> phát hiện asking/exiting -> ghi status
+(
+    # Đợi ít nhất 1 log file xuất hiện
+    sleep 5
+    while true; do
+        for log in /tmp/worker-*.log; do
+            [ -f "$log" ] || continue
+            worker=$(echo "$log" | sed 's|/tmp/worker-||; s|\.log||')
+            status_file="/tmp/worker-${worker}.status"
+            # Đọc dòng cuối khớp event
+            last_event=$(grep '"message":"asking"\|"message":"exiting loop"' "$log" 2>/dev/null | tail -1)
+            if echo "$last_event" | grep -q '"message":"asking"'; then
+                [ "$(cat "$status_file" 2>/dev/null)" != "permission" ] && echo "permission" > "$status_file"
+            elif echo "$last_event" | grep -q '"message":"exiting loop"'; then
+                [ "$(cat "$status_file" 2>/dev/null)" != "done" ] && echo "done" > "$status_file"
+            fi
+        done
+        sleep 2
     done
 ) &
 echo "✓ Manager: tool $mgr_tool, model $mgr_model, project $PROJECT_DIR (bot permission ON)"
