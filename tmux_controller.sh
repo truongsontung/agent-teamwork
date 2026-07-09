@@ -225,6 +225,7 @@ kill_worker() {
     fi
     
     tmux kill-window -t "$SESSION:$name" 2>/dev/null
+    rm -f "/tmp/worker-${name}.log" "/tmp/worker-${name}.status"
     echo "✓ Worker $name killed"
 }
 
