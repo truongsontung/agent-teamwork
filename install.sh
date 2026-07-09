@@ -41,7 +41,7 @@ permission:
   webfetch: deny
   websearch: deny
   question: deny
-  bash: allow
+  bash: deny
 ---
 
 $mgr_prompt
