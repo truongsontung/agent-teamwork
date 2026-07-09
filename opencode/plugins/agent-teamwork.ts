@@ -251,7 +251,7 @@ const toolDefs = {
   }),
 
   worker_status: tool({
-    description: "Kiểm tra trạng thái worker(s). Trả về idle|running|permission|error|dead.",
+    description: "Đọc trạng thái worker từ cache. CHỈ dùng khi user hỏi, KHÔNG dùng để chờ.",
     args: {
       name: tool.schema.string().optional().describe("Tên worker (bỏ trống = tất cả)"),
     },
@@ -361,25 +361,6 @@ const toolDefs = {
       const count = workers.size
       workers.clear()
       return String(count)
-    },
-  }),
-
-  worker_permission_info: tool({
-    description: "Xem chi tiết permission đang chờ của worker.",
-    args: {
-      name: tool.schema.string().describe("Tên worker"),
-    },
-    async execute(args, ctx) {
-      const w = workers.get(args.name)
-      if (!w) throw new Error(`Worker '${args.name}' not found`)
-      try {
-        const data = JSON.parse(require("fs").readFileSync(permPath(args.name), "utf-8"))
-        const perm = data.properties?.permission || "?"
-        const patterns = (data.properties?.patterns || []).join(", ")
-        return `type=${perm} id=${w.pendingPermission}\npatterns=${patterns}`
-      } catch {
-        throw new Error("No permission info")
-      }
     },
   }),
 }
