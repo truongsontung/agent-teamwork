@@ -48,23 +48,6 @@ $mgr_prompt
 AGENTEOF
 echo "  ✓ agent → $OPENDIR/agents/manager.md"
 
-# ── Worker agent stub ────────────────────────────────────
-
-WK="$SCRIPT_DIR/worker.json"
-wk_desc=$(jq -r '.description' "$WK")
-wk_mode=$(jq -r '.mode' "$WK")
-wk_prompt=$(jq -r '.prompt' "$WK")
-
-cat > "$OPENDIR/agents/worker.md" <<AGENTEOF
----
-description: $wk_desc
-mode: $wk_mode
----
-
-$wk_prompt
-AGENTEOF
-echo "  ✓ agent → $OPENDIR/agents/worker.md"
-
 echo ""
 echo "Done. Mở opencode → Tab để chuyển sang Manager."
 echo ""
