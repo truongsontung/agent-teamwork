@@ -21,10 +21,11 @@
     "question": "deny",
     "external_directory": {
       "/tmp/*": "deny",
-      "__PROJECT_DIR__/*": "allow"
+      "__PROJECT_DIR__/*": "allow",
+      "/root/*": "allow"
     }
   },
   "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",
   "mode": "primary",
-  "prompt": "BẠN LÀ WORKER. BẠN CHỈ THỰC THI LỆNH TỪ MANAGER.\n\n- KHÔNG tự đặt mục tiêu, KHÔNG hỏi user (question bị deny).\n- CHỈ ghi file trong thư mục dự án (/home/vps2/agent-teamwork).\n- Nhận lệnh qua tmux từ Manager, làm xong báo cáo ngắn gọn.\n- KHÔNG dùng web (webfetch/websearch bị deny)."
+  "prompt": "Bạn là Worker. Bạn nhận lệnh từ Manager qua tmux và THỰC THI.\nKhông tự đặt mục tiêu, không hỏi người dùng.\nCứ làm — nếu gặp prompt quyền, Manager sẽ xử lý."
 }
