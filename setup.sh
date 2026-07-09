@@ -67,7 +67,7 @@ fi
     tmux list-windows -t "$SESSION" -F '#{window_index} #{window_name}' 2>/dev/null | while read idx name; do
         [ "$name" != "Manager" ] && tmux kill-window -t "$SESSION:$idx" 2>/dev/null
     done
-    rm -f ./.worker-*.log ./.worker-*.status
+    rm -f /tmp/worker-*.log /tmp/worker-*.status
 ) &
 
 # Bot event worker: tail log file từng worker -> phát hiện asking/exiting -> ghi status
@@ -75,10 +75,10 @@ fi
     # Đợi ít nhất 1 log file xuất hiện
     sleep 5
     while tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -q "^Manager$"; do
-        for log in ./.worker-*.log; do
+        for log in /tmp/worker-*.log; do
             [ -f "$log" ] || continue
-            worker=$(echo "$log" | sed 's|./.worker-||; s|\.log||')
-            status_file="./.worker-${worker}.status"
+            worker=$(echo "$log" | sed 's|/tmp/worker-||; s|\.log||')
+            status_file="/tmp/worker-${worker}.status"
             # Đọc dòng cuối khớp event
             last_event=$(grep '"message":"asking"\|"message":"exiting loop"' "$log" 2>/dev/null | tail -1)
             if echo "$last_event" | grep -q '"message":"asking"'; then
