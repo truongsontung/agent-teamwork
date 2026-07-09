@@ -38,4 +38,10 @@ cd "$PROJECT_DIR"
 tmux kill-window -t "Manager" 2>/dev/null
 tmux new-window -n "Manager"
 tmux send-keys -t "Manager" "cd '$PROJECT_DIR' && export AGENT_TEAMWORK_HOME='$SCRIPT_DIR' && export SESSION_NAME=$SESSION && $mgr_tool --model $mgr_model --agent manager" Enter
+
+# Auto-confirm trust prompt ("Yes, I trust this folder") khi mở thư mục mới lần đầu
+sleep 5
+if tmux capture-pane -t "Manager" -p 2>/dev/null | grep -q "I trust this folder"; then
+    tmux send-keys -t "Manager" Enter
+fi
 echo "✓ Manager: tool $mgr_tool, model $mgr_model, project $PROJECT_DIR"

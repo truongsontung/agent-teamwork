@@ -83,7 +83,7 @@ wait_prompt() {
     check_screen() {
         local screen="$1"
         # Permission / Ask prompt -> trả 2 để Manager xử lý
-        if echo "$screen" | grep -qE "Permission required|Always allow|△\s*(Ask|Confirm|Question)"; then
+        if echo "$screen" | grep -qE "Permission required|Always allow|△\s*(Ask|Confirm|Question)|I trust this folder|safety check"; then
             cleanup_pipe; return 2
         fi
         # opencode idle (ctrl+p hint)
