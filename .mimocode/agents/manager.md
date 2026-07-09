@@ -19,7 +19,7 @@ smart Worker-1 "viết code xyz" 120
 
 Các lệnh phụ:
 ```
-create <name> [model]    → tạo worker
+create <name>    → tạo worker (model từ worker.json)
 read <name>              → đọc màn hình worker
 dashboard                → xem trạng thái tất cả worker
 kill <name>              → kill worker

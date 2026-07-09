@@ -60,15 +60,14 @@ create() {
     
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
-    write_worker_config "$DEFAULT_TOOL"
-    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --agent worker" Enter
-    echo "✓ $name created ($model, agent: worker)"
+    echo "✓ $name created (agent: worker, ready for tasks)"
 }
 
 # Send command
 send() {
     local worker="$1"
     shift
+    local cmd="$*"
     
     check_session || return 1
     
@@ -77,7 +76,11 @@ send() {
         return 1
     fi
     
-    tmux send-keys -t "$SESSION:$worker" "$*" Enter
+    # Ghi config mới nhất + launch task bằng run --message (headless)
+    write_worker_config "$DEFAULT_TOOL"
+    tmux send-keys -t "$SESSION:$worker" C-c
+    sleep 0.3
+    tmux send-keys -t "$SESSION:$worker" "cd '$PWD' && $DEFAULT_TOOL run --model $DEFAULT_MODEL --agent worker -- $cmd" Enter
 }
 
 # Send to all workers
@@ -86,7 +89,7 @@ send_all() {
     
     local workers=$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep "Worker")
     for w in $workers; do
-        tmux send-keys -t "$SESSION:$w" "$*" Enter
+        send "$w" "$@"
     done
 }
 

@@ -32,18 +32,28 @@ check_session() {
     fi
 }
 
-# Send keystrokes - handles multi-word commands
+# Send command to worker bằng run --message (headless, không TUI)
+# Mỗi task là 1 process mới — không phụ thuộc TUI timing.
 send() {
     local target="$1"
     shift
-    local keys="$*"
+    local cmd="$*"
     
     check_session || return 1
     if ! worker_exists "$target"; then
         echo "Error: Target '$target' not found"
         return 1
     fi
-    tmux send-keys -t "$SESSION:$target" "$keys" Enter
+    
+    local wk_path="${AGENT_TEAMWORK_HOME:-.}/worker.json"
+    local tool=$(jq -r '.tool // "opencode"' "$wk_path" 2>/dev/null)
+    local model=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$wk_path" 2>/dev/null)
+    
+    # Ghi config mới nhất từ worker.json, rồi chạy task bằng run --message
+    write_worker_config "$tool"
+    tmux send-keys -t "$SESSION:$target" C-c  # ngắt process cũ nếu còn
+    sleep 0.3
+    tmux send-keys -t "$SESSION:$target" "cd '$PWD' && $tool run --model $model --agent worker -- $cmd" Enter
 }
 
 # Read screen
@@ -173,9 +183,7 @@ create_worker() {
     
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
-    write_worker_config "$tool"
-    send "$name" "$tool --model $model --agent worker"
-    echo "✓ Worker $name created ($model, agent: worker)"
+    echo "✓ Worker $name created (agent: worker, ready for tasks)"
 }
 
 # Kill worker with validation

@@ -337,9 +337,8 @@ tc_create_worker_happy_path() {
 }
 tc_create_worker_with_model() {
     set_mock_windows "Manager"
-    create_worker "custom-w" "custom/model" >/dev/null 2>&1
-    local sent; sent=$(get_mock_sent)
-    assert_contains "$sent" "custom/model" "create_worker: uses specified model"
+    create_worker "custom-w" "custom/model" >/dev/null 2>&1; local rc=$?
+    assert_exit 0 $rc "create_worker: accepts model arg (deprecated, model from worker.json)"
 }
 tc_create_worker_max_reached() {
     set_mock_windows "Manager
