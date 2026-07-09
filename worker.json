@@ -1,12 +1,12 @@
 {
-  "model": "deepapi/deepseek-v4-pro",
+  "model": "deepseek/deepseek-v4-pro",
   "max_workers": 5,
   "port_base": 4091,
   "timeout": 300,
   "available_models": [
-    "deepapi/deepseek-chat",
-    "deepapi/deepseek-v4-flash",
-    "deepapi/deepseek-v4-pro"
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-pro"
   ],
   "permission": {
     "bash": "allow",

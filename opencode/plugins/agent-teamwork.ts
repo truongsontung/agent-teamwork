@@ -5,7 +5,7 @@ import { type Plugin, tool } from "@opencode-ai/plugin"
 // ── Config ──────────────────────────────────────────────
 
 const PORT_BASE = 4091
-const DEFAULT_MODEL = "deepapi/deepseek-v4-pro"
+const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 let _client: any = null  // SDK client, set at plugin init
 const WORKER_CONFIG = (() => {
   try {
