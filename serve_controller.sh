@@ -1,7 +1,6 @@
 #!/bin/bash
-# Serve Controller - Quản lý opencode serve workers thay vì tmux TUI
-# API: REST HTTP + SSE event monitor giữa Manager và Worker
-# Bot: bắt sự kiện SSE từ worker → báo Manager biết permission/idle/error
+# Serve Controller - opencode serve workers via REST + SSE
+# Token-optimized: mọi output tối giản, bot log ghi file
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,10 +10,12 @@ PORT_BASE=$(jq -r '.port_base // 4091' "$WK" 2>/dev/null)
 DEFAULT_TIMEOUT=$(jq -r '.timeout // 300' "$WK" 2>/dev/null)
 DEFAULT_MODEL=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$WK" 2>/dev/null)
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+BOT_LOG="$STATE_DIR/bot.log"
 
 # ── Helpers ──────────────────────────────────────────────
 
-die() { echo "Error: $*" >&2; exit 1; }
+die() { echo "err: $*" >&2; exit 1; }
+log()  { echo "$(date +%H:%M:%S) $*" >> "$BOT_LOG"; }
 
 next_port() {
     local port=$PORT_BASE
@@ -33,587 +34,271 @@ worker_pid()   { worker_info "$1" | jq -r .pid; }
 worker_port()  { worker_info "$1" | jq -r .port; }
 worker_model() { worker_info "$1" | jq -r .model; }
 
-alive() {
-    local pid
-    pid=$(worker_pid "$1" 2>/dev/null) || return 1
-    kill -0 "$pid" 2>/dev/null
-}
+alive() { kill -0 "$(worker_pid "$1" 2>/dev/null)" 2>/dev/null; }
 
 check_worker() {
-    worker_exists "$1" || die "Worker '$1' not found"
-    alive "$1" || die "Worker '$1' process dead (pid $(worker_pid "$1" 2>/dev/null || echo N/A))"
+    worker_exists "$1" || die "worker '$1' not found"
+    alive "$1" || die "worker '$1' dead"
 }
 
 wait_serve_ready() {
-    local port=$1 name=$2 max=30 i=0
-    while [ $i -lt $max ]; do
-        if curl -s --max-time 2 "http://127.0.0.1:$port/session/status" >/dev/null 2>&1; then
-            return 0
-        fi
+    local port=$1 i=0
+    while [ $i -lt 30 ]; do
+        curl -s --max-time 2 "http://127.0.0.1:$port/session/status" >/dev/null 2>&1 && return 0
         sleep 1; i=$((i + 1))
     done
-    die "Worker '$name' serve not ready on port $port after ${max}s"
+    die "serve not ready on port $port"
 }
 
 parse_model() {
     local m="$1"
-    if [[ "$m" == */* ]]; then
-        echo "${m%%/*}|${m#*/}"
-    else
-        echo "opencode|$m"
-    fi
+    [[ "$m" == */* ]] && echo "${m%%/*}|${m#*/}" || echo "opencode|$m"
 }
 
 write_worker_config() {
-    local name="$1"
-    local conf="$STATE_DIR/configs/${name}.json"
+    local name="$1" conf="$STATE_DIR/configs/${name}.json"
     mkdir -p "$STATE_DIR/configs"
-
-    local perm
-    perm=$(jq -c '.permission' "$WK" 2>/dev/null)
+    local perm=$(jq -c '.permission' "$WK" 2>/dev/null)
     perm="${perm//__PROJECT_DIR__/$PROJECT_DIR}"
     perm=$(echo "$perm" | jq --arg d "$STATE_DIR" '.external_directory[$d + "/*"] = "allow"')
-
-    jq -n --argjson p "$perm" \
-        '{"$schema":"https://opencode.ai/config.json", permission:$p}' \
-        > "$conf"
+    jq -n --argjson p "$perm" '{"$schema":"https://opencode.ai/config.json",permission:$p}' > "$conf"
     echo "$conf"
 }
 
-# ── SSE Event Monitor (chạy nền, 1 tiến trình/worker) ──
+# ── SSE Monitor (per worker) ─────────────────────────────
 
 monitor_worker() {
     local name="$1" port="$2"
-    local status_file="$STATE_DIR/${name}.status"
-    local perm_file="$STATE_DIR/${name}.permission"
-    local prev=""
+    local sf="$STATE_DIR/${name}.status" pf="$STATE_DIR/${name}.permission"
 
-    # Dùng curl stream (--no-buffer) đọc SSE events từ serve
-    curl -s -N --no-buffer --max-time 0 \
-        "http://127.0.0.1:$port/event" 2>/dev/null | while IFS= read -r line; do
+    curl -s -N --no-buffer "http://127.0.0.1:$port/event" 2>/dev/null | while IFS= read -r line; do
 
-        # ── Format A: SSE chuẩn (event: / data:) ──
         if [[ "$line" == event:* ]]; then
-            local event_type="${line#event: }"
-            read -r data_line
-            local data=""
-            if [[ "$data_line" == data:* ]]; then
-                data="${data_line#data: }"
-            fi
-            process_event "$name" "$event_type" "$data" "$status_file" "$perm_file"
+            local et="${line#event: }" data=""
+            read -r dl; [[ "$dl" == data:* ]] && data="${dl#data: }"
+        elif echo "$line" | jq -e '.type' >/dev/null 2>&1; then
+            local et=$(echo "$line" | jq -r '.type') data="$line"
+        else
             continue
         fi
 
-        # ── Format B: nd-JSON (mỗi dòng 1 event) ──
-        if echo "$line" | jq -e '.type' >/dev/null 2>&1; then
-            local event_type data
-            event_type=$(echo "$line" | jq -r '.type')
-            data="$line"
-            process_event "$name" "$event_type" "$data" "$status_file" "$perm_file"
-        fi
+        case "$et" in
+            "session.idle")
+                echo "idle" > "$sf"; log "event $name idle" ;;
+            "session.error")
+                echo "error" > "$sf"; echo "$data" > "$STATE_DIR/${name}.error"
+                log "event $name error" ;;
+            "permission.asked")
+                echo "permission" > "$sf"; echo "$data" > "$pf"
+                local pid=$(echo "$data" | jq -r '.permissionID // .id // "?"' 2>/dev/null)
+                echo "$pid" > "$STATE_DIR/${name}.permission_id"
+                local tl=$(echo "$data" | jq -r '.tool // "?"' 2>/dev/null)
+                log "event $name permission tool=$tl id=$pid" ;;
+            "permission.replied")
+                echo "running" > "$sf"; rm -f "$pf" "$STATE_DIR/${name}.permission_id"
+                log "event $name perm_resolved" ;;
+            "session.status")
+                local s=$(echo "$data" | jq -r '.status // .sessionStatus // ""' 2>/dev/null)
+                [ -n "$s" ] && [ "$s" != "null" ] && echo "$s" > "$sf" ;;
+            "session.created")
+                echo "running" > "$sf"; log "event $name created" ;;
+        esac
     done
 }
 
-process_event() {
-    local name="$1" event_type="$2" data="$3" status_file="$4" perm_file="$5"
-
-    case "$event_type" in
-        "session.idle")
-            echo "idle" > "$status_file"
-            echo "done" > "$STATE_DIR/${name}.status.prev"  # reset chờ
-            echo "bot:event worker=$name status=idle"
-            ;;
-
-        "session.error")
-            echo "error" > "$status_file"
-            echo "$data" > "$STATE_DIR/${name}.error"
-            echo "bot:event worker=$name status=error data=$data"
-            ;;
-
-        "permission.asked")
-            echo "permission" > "$status_file"
-            echo "$data" > "$perm_file"
-            # Trích permissionID để Manager gọi allow/deny
-            local perm_id
-            perm_id=$(echo "$data" | jq -r '.permissionID // .id // "unknown"' 2>/dev/null)
-            echo "$perm_id" > "$STATE_DIR/${name}.permission_id"
-            echo "bot:event worker=$name status=permission permID=$perm_id tool=$(echo "$data" | jq -r '.tool // "?"' 2>/dev/null)"
-            ;;
-
-        "permission.replied")
-            echo "running" > "$status_file"
-            rm -f "$perm_file" "$STATE_DIR/${name}.permission_id"
-            echo "bot:event worker=$name status=running (permission resolved)"
-            ;;
-
-        "session.status")
-            local s
-            s=$(echo "$data" | jq -r '.status // .sessionStatus // "running"' 2>/dev/null)
-            [ -n "$s" ] && [ "$s" != "null" ] && echo "$s" > "$status_file"
-            ;;
-
-        "session.created")
-            echo "running" > "$status_file"
-            echo "bot:event worker=$name status=running (session created)"
-            ;;
-
-        "tool.execute.before")
-            # Cập nhật last activity time để detect stuck
-            date +%s > "$STATE_DIR/${name}.last_activity"
-            ;;
-
-        "tool.execute.after")
-            date +%s > "$STATE_DIR/${name}.last_activity"
-            ;;
-    esac
-}
-
-# ── Permission handling ──────────────────────────────────
+# ── Permission ───────────────────────────────────────────
 
 cmd_allow() {
-    local name="$1"
-    check_worker "$name"
-
-    local port perm_id
-    port=$(worker_port "$name")
-    perm_id=$(cat "$STATE_DIR/${name}.permission_id" 2>/dev/null || echo "")
-
-    if [ -z "$perm_id" ] || [ "$perm_id" = "unknown" ]; then
-        die "No pending permission for '$name'"
-    fi
-
-    local resp
-    resp=$(curl -s --max-time 10 \
-        -X POST "http://127.0.0.1:$port/session/$name/permissions/$perm_id" \
-        -H "Content-Type: application/json" \
-        -d '{"action":"allow"}' 2>&1)
-
-    rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
-    echo "running" > "$STATE_DIR/${name}.status"
-    echo "✓ Permission $perm_id allowed on $name"
+    check_worker "$1"
+    local port=$(worker_port "$1")
+    local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "")
+    [ -z "$pid" ] || [ "$pid" = "?" ] && die "no pending permission"
+    curl -s --max-time 10 -X POST \
+        "http://127.0.0.1:$port/session/$1/permissions/$pid" \
+        -H "Content-Type: application/json" -d '{"action":"allow"}' >/dev/null 2>&1
+    rm -f "$STATE_DIR/${1}.permission" "$STATE_DIR/${1}.permission_id"
+    echo "running" > "$STATE_DIR/${1}.status"
+    echo "ok"
 }
 
 cmd_deny() {
-    local name="$1"
-    check_worker "$name"
-
-    local port perm_id
-    port=$(worker_port "$name")
-    perm_id=$(cat "$STATE_DIR/${name}.permission_id" 2>/dev/null || echo "")
-
-    if [ -z "$perm_id" ] || [ "$perm_id" = "unknown" ]; then
-        die "No pending permission for '$name'"
-    fi
-
-    local resp
-    resp=$(curl -s --max-time 10 \
-        -X POST "http://127.0.0.1:$port/session/$name/permissions/$perm_id" \
-        -H "Content-Type: application/json" \
-        -d '{"action":"deny"}' 2>&1)
-
-    rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
-    echo "running" > "$STATE_DIR/${name}.status"
-    echo "✗ Permission $perm_id denied on $name"
+    check_worker "$1"
+    local port=$(worker_port "$1")
+    local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "")
+    [ -z "$pid" ] || [ "$pid" = "?" ] && die "no pending permission"
+    curl -s --max-time 10 -X POST \
+        "http://127.0.0.1:$port/session/$1/permissions/$pid" \
+        -H "Content-Type: application/json" -d '{"action":"deny"}' >/dev/null 2>&1
+    rm -f "$STATE_DIR/${1}.permission" "$STATE_DIR/${1}.permission_id"
+    echo "running" > "$STATE_DIR/${1}.status"
+    echo "ok"
 }
 
 cmd_permission_info() {
-    local name="$1"
-    [ -f "$STATE_DIR/${name}.permission" ] || die "No pending permission for '$name'"
-
-    echo "Permission pending on $name:"
-    echo "──────────────────────────────────────"
-    jq '.' "$STATE_DIR/${name}.permission" 2>/dev/null || cat "$STATE_DIR/${name}.permission"
-    echo ""
-    local perm_id
-    perm_id=$(cat "$STATE_DIR/${name}.permission_id" 2>/dev/null || echo "?")
-    echo "permissionID: $perm_id"
-    echo ""
-    echo "Manager: ./serve_controller.sh allow $name   (chấp nhận)"
-    echo "Manager: ./serve_controller.sh deny $name     (từ chối)"
+    [ -f "$STATE_DIR/${1}.permission" ] || die "no pending permission"
+    local tl=$(jq -r '.tool // "?"' "$STATE_DIR/${1}.permission" 2>/dev/null)
+    local pid=$(cat "$STATE_DIR/${1}.permission_id" 2>/dev/null || echo "?")
+    echo "tool=$tl id=$pid"
+    jq -r '.args // .command // ""' "$STATE_DIR/${1}.permission" 2>/dev/null | head -3
 }
 
 # ── Core Commands ────────────────────────────────────────
 
 cmd_create() {
-    local name="$1"
-    local model="${2:-$DEFAULT_MODEL}"
+    local name="$1" model="${2:-$DEFAULT_MODEL}"
+    worker_exists "$name" && die "exists"
+    local max=$(jq -r '.max_workers // 5' "$WK")
+    local cur=$(ls "$STATE_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
+    [ "$cur" -ge "$max" ] && die "max $max"
 
-    worker_exists "$name" && die "Worker '$name' already exists"
-
-    local max
-    max=$(jq -r '.max_workers // 5' "$WK")
-    local current
-    current=$(ls "$STATE_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
-    [ "$current" -ge "$max" ] && die "Max workers ($max) reached"
-
-    local port
-    port=$(next_port)
-
-    local config_file
-    config_file=$(write_worker_config "$name")
-
-    local logfile="$STATE_DIR/${name}.log"
-    OPENCODE_CONFIG="$config_file" \
-        nohup opencode serve --port "$port" --hostname 127.0.0.1 \
-        > "$logfile" 2>&1 &
+    local port=$(next_port)
+    local cf=$(write_worker_config "$name")
+    OPENCODE_CONFIG="$cf" nohup opencode serve --port "$port" --hostname 127.0.0.1 \
+        > "$STATE_DIR/${name}.log" 2>&1 &
     local pid=$!
 
     mkdir -p "$STATE_DIR"
-    jq -n \
-        --arg name "$name" \
-        --arg port "$port" \
-        --arg pid "$pid" \
-        --arg model "$model" \
-        --arg config "$config_file" \
-        '{name:$name,port:($port|tonumber),pid:($pid|tonumber),model:$model,config:$config,status:"starting"}' \
-        > "$STATE_DIR/$name.json"
+    jq -n --arg n "$name" --arg p "$port" --arg i "$pid" --arg m "$model" \
+        '{name:$n,port:($p|tonumber),pid:($i|tonumber),model:$m}' > "$STATE_DIR/$name.json"
 
-    wait_serve_ready "$port" "$name"
-
-    # Khởi động SSE monitor cho worker này
+    wait_serve_ready "$port"
     monitor_worker "$name" "$port" &
-    local mon_pid=$!
-    echo "$mon_pid" > "$STATE_DIR/${name}.sse_pid"
-
+    echo $! > "$STATE_DIR/${name}.sse_pid"
     echo "running" > "$STATE_DIR/${name}.status"
     date +%s > "$STATE_DIR/${name}.last_activity"
-
-    echo "✓ $name created (port:$port pid:$pid mon_pid:$mon_pid model:$model)"
+    echo "+$name"
 }
 
 cmd_send() {
-    local name="$1"; shift
-    local prompt="$*"
-
+    local name="$1"; shift; local prompt="$*"
     check_worker "$name"
-    local port model_str provider model_id timeout
-    port=$(worker_port "$name")
-    model_str=$(worker_model "$name")
+    local port=$(worker_port "$name") model_str=$(worker_model "$name")
     IFS='|' read -r provider model_id <<< "$(parse_model "$model_str")"
-    timeout=$(jq -r ".timeout // $DEFAULT_TIMEOUT" "$STATE_DIR/$name.json")
-
-    # Reset permission state
+    local timeout=$(jq -r ".timeout // $DEFAULT_TIMEOUT" "$STATE_DIR/$name.json")
     rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
 
-    local payload
-    payload=$(jq -n \
-        --arg text "$prompt" \
-        --arg provider "$provider" \
-        --arg model_id "$model_id" \
-        '{
-            parts: [{type:"text",text:$text}],
-            model: {providerID:$provider, modelID:$model_id}
-        }')
-
+    local payload=$(jq -n --arg t "$prompt" --arg p "$provider" --arg m "$model_id" \
+        '{parts:[{type:"text",text:$t}],model:{providerID:$p,modelID:$m}}')
     echo "$payload" > "$STATE_DIR/${name}.last_request"
 
     local result http_code
     result=$(curl -s -w '\n%{http_code}' --max-time "$timeout" \
         -X POST "http://127.0.0.1:$port/session/$name/message" \
-        -H "Content-Type: application/json" \
-        -d "$payload" 2>&1)
-
+        -H "Content-Type: application/json" -d "$payload" 2>&1)
     http_code=$(echo "$result" | tail -1)
-    local body
-    body=$(echo "$result" | sed '$d')
-
+    local body=$(echo "$result" | sed '$d')
     echo "$body" > "$STATE_DIR/${name}.last_result"
 
-    if [ "$http_code" != "200" ]; then
-        echo "[HTTP $http_code] $body" >&2
-        return 1
-    fi
-
-    echo "$body" | jq -r '
-        [.parts[]? | select(.type == "text") | .text // empty] | join("\n")
-    ' 2>/dev/null || echo "$body"
+    [ "$http_code" != "200" ] && { echo "$body" >&2; return 1; }
+    jq -r '[.parts[]?|select(.type=="text").text//empty]|join("\n")' \
+        "$STATE_DIR/${name}.last_result" 2>/dev/null || cat "$STATE_DIR/${name}.last_result"
 }
 
 cmd_send_async() {
-    local name="$1"; shift
-    local prompt="$*"
-
+    local name="$1"; shift; local prompt="$*"
     check_worker "$name"
-    local port model_str provider model_id
-    port=$(worker_port "$name")
-    model_str=$(worker_model "$name")
+    local port=$(worker_port "$name") model_str=$(worker_model "$name")
     IFS='|' read -r provider model_id <<< "$(parse_model "$model_str")"
-
     rm -f "$STATE_DIR/${name}.permission" "$STATE_DIR/${name}.permission_id"
 
-    local payload
-    payload=$(jq -n \
-        --arg text "$prompt" \
-        --arg provider "$provider" \
-        --arg model_id "$model_id" \
-        '{
-            parts: [{type:"text",text:$text}],
-            model: {providerID:$provider, modelID:$model_id}
-        }')
-
+    local payload=$(jq -n --arg t "$prompt" --arg p "$provider" --arg m "$model_id" \
+        '{parts:[{type:"text",text:$t}],model:{providerID:$p,modelID:$m}}')
     echo "$payload" > "$STATE_DIR/${name}.last_request"
 
-    local http_code
-    http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    local hc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
         -X POST "http://127.0.0.1:$port/session/$name/prompt_async" \
-        -H "Content-Type: application/json" \
-        -d "$payload" 2>&1)
-
-    if [ "$http_code" = "204" ] || [ "$http_code" = "200" ]; then
-        echo "✓ Sent to $name (async)"
-    else
-        echo "! Send failed (HTTP $http_code)"
-        return 1
-    fi
+        -H "Content-Type: application/json" -d "$payload" 2>&1)
+    [ "$hc" = "204" ] || [ "$hc" = "200" ] || { echo "err: HTTP $hc"; return 1; }
+    echo "+"
 }
 
 cmd_status() {
     local name="$1"
-
-    # Ưu tiên: file bot ghi (SSE real-time) > poll API
-    if [ -f "$STATE_DIR/${name}.status" ]; then
-        local bot_status
-        bot_status=$(cat "$STATE_DIR/${name}.status")
-        echo "$bot_status"
-        return
-    fi
-
-    if ! alive "$name" 2>/dev/null; then
-        echo "dead"; return
-    fi
-
-    local port
-    port=$(worker_port "$name" 2>/dev/null)
-    [ -z "$port" ] && { echo "unknown"; return; }
-
+    [ -f "$STATE_DIR/${name}.status" ] && { cat "$STATE_DIR/${name}.status"; return; }
+    alive "$name" 2>/dev/null || { echo "dead"; return; }
+    local port=$(worker_port "$name" 2>/dev/null)
+    [ -z "$port" ] && { echo "?"; return; }
     curl -s --max-time 5 "http://127.0.0.1:$port/session/status" \
-        | jq -r ".[\"$name\"] // \"running\"" 2>/dev/null \
-        || echo "unknown"
+        | jq -r ".[\"$name\"] // \"running\"" 2>/dev/null || echo "?"
 }
 
 cmd_status_all() {
     for f in "$STATE_DIR"/*.json; do
         [ -f "$f" ] || continue
-        local name st extra
-        name=$(jq -r .name "$f")
-
-        st=$(cmd_status "$name" 2>/dev/null || echo "dead")
-
-        extra=""
-        [ "$st" = "permission" ] && extra=" → ./serve_controller.sh allow $name"
-        echo "$name: $st$extra"
+        local n=$(jq -r .name "$f") s
+        s=$(cmd_status "$n" 2>/dev/null || echo "dead")
+        echo "$n $s"
     done
 }
 
 cmd_result() {
     local name="$1"
-    [ -f "$STATE_DIR/${name}.last_result" ] || die "No result for '$name'"
-
-    jq -r '[.parts[]? | select(.type == "text") | .text // empty] | join("\n")' \
-        "$STATE_DIR/${name}.last_result" 2>/dev/null \
-        || cat "$STATE_DIR/${name}.last_result"
-}
-
-cmd_result_full() {
-    local name="$1"
-    local port
-    port=$(worker_port "$name" 2>/dev/null)
-
-    if [ -n "${port:-}" ] && alive "$name" 2>/dev/null; then
-        curl -s --max-time 10 "http://127.0.0.1:$port/session/$name/message" 2>/dev/null
-    elif [ -f "$STATE_DIR/${name}.last_result" ]; then
-        cat "$STATE_DIR/${name}.last_result"
-    else
-        die "No result for '$name'"
-    fi
+    [ -f "$STATE_DIR/${name}.last_result" ] || die "no result"
+    jq -r '[.parts[]?|select(.type=="text").text//empty]|join("\n")' \
+        "$STATE_DIR/${name}.last_result" 2>/dev/null || cat "$STATE_DIR/${name}.last_result"
 }
 
 cmd_kill() {
-    local name="$1"
-    worker_exists "$name" || die "Worker '$name' not found"
-
-    local port pid
-    port=$(worker_port "$name" 2>/dev/null || echo "")
-    pid=$(worker_pid "$name" 2>/dev/null || echo "")
-
-    # Kill SSE monitor trước
-    if [ -f "$STATE_DIR/${name}.sse_pid" ]; then
-        kill "$(cat "$STATE_DIR/${name}.sse_pid")" 2>/dev/null || true
-    fi
-
-    # Abort session
-    if [ -n "$port" ] && curl -s --max-time 3 "http://127.0.0.1:$port/session/status" >/dev/null 2>&1; then
-        curl -s -X POST "http://127.0.0.1:$port/session/$name/abort" >/dev/null 2>&1 || true
-    fi
-
-    # Kill process
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-    sleep 1
-    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
-
-    # Cleanup
-    rm -f "$STATE_DIR/$name.json" \
-          "$STATE_DIR/${name}.log" \
-          "$STATE_DIR/${name}.last_request" \
-          "$STATE_DIR/${name}.last_result" \
-          "$STATE_DIR/${name}.status" \
-          "$STATE_DIR/${name}.status.prev" \
-          "$STATE_DIR/${name}.permission" \
-          "$STATE_DIR/${name}.permission_id" \
-          "$STATE_DIR/${name}.sse_pid" \
-          "$STATE_DIR/${name}.error" \
-          "$STATE_DIR/${name}.last_activity" \
-          "$STATE_DIR/configs/${name}.json"
-
-    echo "✓ $name killed"
+    worker_exists "$1" || die "not found"
+    local port=$(worker_port "$1" 2>/dev/null || echo "") pid=$(worker_pid "$1" 2>/dev/null || echo "")
+    [ -f "$STATE_DIR/${1}.sse_pid" ] && kill "$(cat "$STATE_DIR/${1}.sse_pid")" 2>/dev/null || true
+    [ -n "$port" ] && curl -s --max-time 3 -X POST "http://127.0.0.1:$port/session/$1/abort" >/dev/null 2>&1 || true
+    [ -n "$pid" ] && { kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true; }
+    rm -f "$STATE_DIR/$1.json" "$STATE_DIR/${1}".{log,last_request,last_result,status,status.prev,permission,permission_id,sse_pid,error,last_activity} "$STATE_DIR/configs/${1}.json"
+    echo "-$1"
 }
 
 cmd_killall() {
-    local count=0
+    local c=0
     for f in "$STATE_DIR"/*.json; do
         [ -f "$f" ] || continue
-        local name
-        name=$(jq -r .name "$f")
-        cmd_kill "$name"
-        count=$((count + 1))
+        cmd_kill "$(jq -r .name "$f")" 2>/dev/null; c=$((c+1))
     done
     rm -rf "$STATE_DIR/configs"
-    echo "✓ $count workers killed"
+    echo "$c"
 }
 
 cmd_dashboard() {
-    echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║         SERVE CONTROLLER DASHBOARD                     ║"
-    echo "║         $(date '+%Y-%m-%d %H:%M:%S')                            ║"
-    echo "╠══════════════════════════════════════════════════════════╣"
-
     local has=false
     for f in "$STATE_DIR"/*.json; do
         [ -f "$f" ] || continue
         has=true
-        local name port pid model status uptime
-        name=$(jq -r .name "$f")
-        port=$(jq -r .port "$f")
-        pid=$(jq -r .pid "$f")
-        model=$(jq -r .model "$f")
-
-        # Status từ bot (real-time SSE) hoặc poll API
-        if [ -f "$STATE_DIR/${name}.status" ]; then
-            status=$(cat "$STATE_DIR/${name}.status")
-        elif alive "$name" 2>/dev/null; then
-            status=$(curl -s --max-time 3 "http://127.0.0.1:$port/session/status" 2>/dev/null \
-                | jq -r ".[\"$name\"] // \"running\"" 2>/dev/null)
-        else
-            status="dead"
-        fi
-
-        if [ -d "/proc/$pid" ]; then
-            uptime=$(ps -p "$pid" -o etime= 2>/dev/null | xargs)
-        else
-            uptime="N/A"
-        fi
-
-        # Highlight permission
-        local flag=""
-        [ "$status" = "permission" ] && flag=" ⚠ PERMISSION PENDING"
-
-        echo "║  $name$flag"
-        echo "║    port:$port  pid:$pid  status:${status:-unknown}"
-        echo "║    model:$model  uptime:${uptime:-N/A}"
-
-        # Nếu permission pending, hiển thị thêm
-        if [ "$status" = "permission" ] && [ -f "$STATE_DIR/${name}.permission" ]; then
-            local tool perm_id
-            tool=$(jq -r '.tool // "?"' "$STATE_DIR/${name}.permission" 2>/dev/null)
-            perm_id=$(cat "$STATE_DIR/${name}.permission_id" 2>/dev/null || echo "?")
-            echo "║    perm: tool=$tool  id=$perm_id"
-            echo "║    → ./serve_controller.sh allow $name"
-        fi
-        echo "║"
+        local n=$(jq -r .name "$f") s
+        [ -f "$STATE_DIR/${n}.status" ] && s=$(cat "$STATE_DIR/${n}.status") || s="?"
+        echo "$n $s"
     done
-
-    [ "$has" = false ] && echo "║  (no workers running)                         ║"
-    echo "╚══════════════════════════════════════════════════════════╝"
+    [ "$has" = false ] && echo "(none)"
 }
 
-# Bot: background event monitor – spawn SSE per worker
+# Bot: background SSE monitor
 cmd_bot() {
-    mkdir -p "$STATE_DIR"
-    echo "bot:started pid=$$"
+    mkdir -p "$STATE_DIR"; touch "$BOT_LOG"
+    log "started"
 
-    # Spawn SSE monitor cho tất cả worker hiện có
     for f in "$STATE_DIR"/*.json; do
         [ -f "$f" ] || continue
-        local name port
-        name=$(jq -r .name "$f")
-        port=$(jq -r .port "$f")
-
-        if ! alive "$name" 2>/dev/null; then
-            echo "dead" > "$STATE_DIR/${name}.status"
-            continue
-        fi
-
-        # Chỉ spawn nếu chưa có monitor
-        if [ -f "$STATE_DIR/${name}.sse_pid" ]; then
-            local old_pid
-            old_pid=$(cat "$STATE_DIR/${name}.sse_pid" 2>/dev/null)
-            if kill -0 "$old_pid" 2>/dev/null; then continue; fi
-        fi
-
-        monitor_worker "$name" "$port" &
-        echo $! > "$STATE_DIR/${name}.sse_pid"
-        echo "bot:spawned sse_monitor $name (pid:$!)"
+        local n=$(jq -r .name "$f") p=$(jq -r .port "$f")
+        alive "$n" 2>/dev/null || { echo "dead" > "$STATE_DIR/${n}.status"; continue; }
+        [ -f "$STATE_DIR/${n}.sse_pid" ] && kill -0 "$(cat "$STATE_DIR/${n}.sse_pid")" 2>/dev/null && continue
+        monitor_worker "$n" "$p" &
+        echo $! > "$STATE_DIR/${n}.sse_pid"
+        log "sse_monitor $n pid=$!"
     done
 
-    # Main loop: quét worker mới + kiểm tra stuck permission
     while true; do
         for f in "$STATE_DIR"/*.json; do
             [ -f "$f" ] || continue
-            local name port pid
-            name=$(jq -r .name "$f")
-            port=$(jq -r .port "$f")
-            pid=$(jq -r .pid "$f")
-
-            if ! kill -0 "$pid" 2>/dev/null; then
-                [ "$(cat "$STATE_DIR/${name}.status" 2>/dev/null)" != "dead" ] && \
-                    echo "dead" > "$STATE_DIR/${name}.status"
+            local n=$(jq -r .name "$f") p=$(jq -r .port "$f") i=$(jq -r .pid "$f")
+            if ! kill -0 "$i" 2>/dev/null; then
+                [ "$(cat "$STATE_DIR/${n}.status" 2>/dev/null)" != "dead" ] && echo "dead" > "$STATE_DIR/${n}.status"
                 continue
             fi
-
-            # Spawn SSE monitor nếu chưa có
-            if [ ! -f "$STATE_DIR/${name}.sse_pid" ]; then
-                monitor_worker "$name" "$port" &
-                echo $! > "$STATE_DIR/${name}.sse_pid"
-                echo "bot:spawned sse_monitor $name (pid:$!)"
-                continue
-            fi
-
-            local old_pid
-            old_pid=$(cat "$STATE_DIR/${name}.sse_pid" 2>/dev/null)
-            if ! kill -0 "$old_pid" 2>/dev/null; then
-                monitor_worker "$name" "$port" &
-                echo $! > "$STATE_DIR/${name}.sse_pid"
-                echo "bot:respawning sse_monitor $name (pid:$!)"
-                continue
-            fi
-
-            # Kiểm tra stuck: status=permission nhưng không có SSE update
-            local cur_status
-            cur_status=$(cat "$STATE_DIR/${name}.status" 2>/dev/null || echo "unknown")
-
-            # Nếu SSE detect permission nhưng permission file không có
-            # → fallback: poll trực tiếp session để check
-            if [ "$cur_status" = "permission" ] && [ ! -f "$STATE_DIR/${name}.permission" ]; then
-                local resp
-                resp=$(curl -s --max-time 5 "http://127.0.0.1:$port/session/status" 2>/dev/null || echo "")
-                if [ -z "$resp" ]; then continue; fi
-                # SSE monitor có thể đã crash, restart
-                monitor_worker "$name" "$port" &
-                echo $! > "$STATE_DIR/${name}.sse_pid"
-                echo "bot:respawning sse_monitor $name (cur=$cur_status, no perm file)"
+            if [ ! -f "$STATE_DIR/${n}.sse_pid" ] || ! kill -0 "$(cat "$STATE_DIR/${n}.sse_pid")" 2>/dev/null; then
+                monitor_worker "$n" "$p" &
+                echo $! > "$STATE_DIR/${n}.sse_pid"
+                log "sse_monitor $n respawn pid=$!"
             fi
         done
-
         sleep 5
     done
 }
@@ -623,89 +308,27 @@ cmd_bot() {
 mkdir -p "$STATE_DIR" "$STATE_DIR/configs"
 
 case "${1:-}" in
-    create)
-        shift; cmd_create "$@"
-        ;;
-    send)
-        shift; cmd_send "$@"
-        ;;
-    send-async)
-        shift; cmd_send_async "$@"
-        ;;
-    status)
-        shift; cmd_status "$@"
-        ;;
-    status-all)
-        cmd_status_all
-        ;;
-    result)
-        shift; cmd_result "$@"
-        ;;
-    result-full)
-        shift; cmd_result_full "$@"
-        ;;
-    allow)
-        shift; cmd_allow "$@"
-        ;;
-    deny)
-        shift; cmd_deny "$@"
-        ;;
-    permission-info|perminfo)
-        shift; cmd_permission_info "$@"
-        ;;
-    kill)
-        shift; cmd_kill "$@"
-        ;;
-    killall)
-        cmd_killall
-        ;;
-    dashboard|dash)
-        cmd_dashboard
-        ;;
-    bot)
-        cmd_bot
-        ;;
+    create)      shift; cmd_create "$@" ;;
+    send)        shift; cmd_send "$@" ;;
+    send-async)  shift; cmd_send_async "$@" ;;
+    status)      shift; cmd_status "$@" ;;
+    status-all)  cmd_status_all ;;
+    result)      shift; cmd_result "$@" ;;
+    allow)       shift; cmd_allow "$@" ;;
+    deny)        shift; cmd_deny "$@" ;;
+    permission-info|perminfo) shift; cmd_permission_info "$@" ;;
+    kill)        shift; cmd_kill "$@" ;;
+    killall)     cmd_killall ;;
+    dashboard|dash) cmd_dashboard ;;
+    bot)         cmd_bot ;;
     *)
         cat <<EOF
-Serve Controller — opencode serve worker management
-Bot: SSE event monitor → bắt permission/idle/error → báo Manager
-
-USAGE:
-  $0 create <name> [model]       Tạo worker (serve process, auto port)
-  $0 send <name> <prompt>        Gửi task — BLOCKING, trả kết quả
-  $0 send-async <name> <prompt>  Gửi task — NON-BLOCKING (khuyên dùng + poll)
-  $0 status <name>               Trạng thái: idle|running|permission|error|dead
-  $0 status-all                  Trạng thái tất cả + hint allow
-  $0 result <name>               Đọc kết quả text
-  $0 result-full <name>          Đọc full JSON response
-
-PERMISSION HANDLING:
-  $0 permission-info <name>      Xem chi tiết permission đang chờ
-  $0 allow <name>                Chấp nhận permission
-  $0 deny <name>                 Từ chối permission
-
-MANAGEMENT:
-  $0 dashboard                   Bảng tổng quan (có highlight permission)
-  $0 kill <name>                 Hủy worker
-  $0 killall                     Hủy tất cả workers
-  $0 bot                         Chạy background event monitor (SSE)
-
-TYPICAL MANAGER FLOW (không bị kẹt permission):
-  1. create Worker-1
-  2. send-async Worker-1 "nhiệm vụ"
-  3. while true; do
-       s=\$(status Worker-1)
-       case \$s in
-         idle)       result Worker-1; break ;;
-         permission) permission-info Worker-1; allow Worker-1 ;;
-         error)      break ;;
-       esac
-       sleep 3
-     done
-
-STATE: $STATE_DIR
-PORT BASE: $PORT_BASE
-DEFAULT MODEL: $DEFAULT_MODEL
+USAGE: $0 <cmd>
+  create <n> [m]    send <n> <task>    send-async <n> <task>
+  status <n>        status-all         result <n>
+  permission-info <n>  allow <n>       deny <n>
+  kill <n>          killall            dashboard
+  bot
 EOF
         ;;
 esac
