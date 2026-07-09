@@ -20,8 +20,8 @@
     "websearch": "deny",
     "question": "deny",
     "external_directory": {
-      "/home/vps2/agent-teamwork/*": "allow",
-      "/tmp/*": "deny"
+      "/tmp/*": "deny",
+      "__PROJECT_DIR__/*": "allow"
     }
   },
   "description": "Worker agent - bị Manager giao việc, quyền bị giới hạn",

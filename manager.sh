@@ -15,6 +15,7 @@ write_worker_config() {
     local dir=$([ "$tool" = "opencode" ] && echo .opencode || echo .mimocode)
     mkdir -p "$dir"
     local perm=$(jq -c '.permission' worker.json 2>/dev/null)
+    perm="${perm//__PROJECT_DIR__/$PWD}"
     jq -n --argjson p "$perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$dir/opencode.json"
     # Sinh worker.md (agent definition) từ worker.json
     local desc=$(jq -r '.description' worker.json 2>/dev/null)

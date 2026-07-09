@@ -20,6 +20,7 @@ mgr_dir=$(dir_for "$mgr_tool")
 
 # Ghi tool config (permission) + agent definition (manager.md) cho Manager
 mkdir -p "$mgr_dir"
+mgr_perm="${mgr_perm//__PROJECT_DIR__/$PWD}"
 jq -n --argjson p "$mgr_perm" '{ "$schema": "https://opencode.ai/config.json", permission: $p }' > "$mgr_dir/opencode.json"
 mkdir -p "$mgr_dir/agents"
 printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$mgr_desc" "$mgr_mode" "$mgr_prompt" > "$mgr_dir/agents/manager.md"
