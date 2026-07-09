@@ -1,6 +1,6 @@
 {
-  "tool": "mimo",
-  "model": "mimo/mimo-auto",
+  "tool": "opencode",
+  "model": "opencode/deepseek-v4-flash-free",
   "permission": {
     "bash": "allow",
     "read": "allow",
