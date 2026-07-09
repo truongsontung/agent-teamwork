@@ -209,8 +209,8 @@ create_worker() {
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
     write_worker_config "$tool"
-    tmux send-keys -t "$SESSION:$name" "$tool --model $model --agent worker --print-logs 2>/tmp/worker-$name.log" Enter
-    echo "✓ Worker $name created ($model, agent: worker, log: /tmp/worker-$name.log)"
+    tmux send-keys -t "$SESSION:$name" "$tool --model $model --agent worker --print-logs 2>./.worker-$name.log" Enter
+    echo "✓ Worker $name created ($model, agent: worker, log: ./.worker-$name.log)"
 }
 
 # Kill worker with validation
@@ -225,7 +225,7 @@ kill_worker() {
     fi
     
     tmux kill-window -t "$SESSION:$name" 2>/dev/null
-    rm -f "/tmp/worker-${name}.log" "/tmp/worker-${name}.status"
+    rm -f "./.worker-${name}.log" "./.worker-${name}.status"
     echo "✓ Worker $name killed"
 }
 
