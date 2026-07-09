@@ -398,6 +398,7 @@ export const AgentTeamwork: Plugin = async ({ client, $ }) => {
         try { process.kill(w.pid) } catch {}
       }
       workers.clear()
+      try { require("fs").rmSync(statusDir, { recursive: true, force: true }) } catch {}
     },
 
     tool: toolDefs,
