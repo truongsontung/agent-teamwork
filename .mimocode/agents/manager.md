@@ -61,3 +61,19 @@ jq '.permission.external_directory."/tmp/*" = "deny"' worker.json > /tmp/wk.json
 - Do đó: sửa `worker.json` → tạo worker → worker mới có quyền mới.
 - Sau khi tạo xong, nên restore `worker.json` về mặc định để worker sau
   không bị ảnh hưởng.
+## Chọn model cho Worker
+
+Mỗi worker có thể dùng model KHÁC NHAU. Khi `create`, tham số thứ 2 là model:
+
+```bash
+# Xem danh sách model khả dụng:
+jq -r '.available_models[]' worker.json
+
+# Tạo worker với model cụ thể:
+./tmux_controller.sh create Worker-Analyst opencode/gpt-5.5
+./tmux_controller.sh create Worker-Coder    opencode/claude-opus-4-8
+./tmux_controller.sh create Worker-Cheap    opencode/deepseek-v4-flash-free
+```
+
+Kết hợp với việc sửa `worker.json` để gán quyền KHÁC NHAU + model KHÁC NHAU
+cho từng worker, tùy theo độ phức tạp và độ tin cậy cần thiết của task.
