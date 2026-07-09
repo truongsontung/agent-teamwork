@@ -19,9 +19,9 @@ Thumbs.db
 *.swo
 
 # Agent runtime state
-.mimocode/
+.mimocode/*
 !.mimocode/agents/
-.opencode/
+.opencode/*
 !.opencode/agents/
 
 # Temp
