@@ -60,7 +60,9 @@ create() {
     
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
-    echo "✓ $name created (agent: worker, ready for tasks)"
+    write_worker_config "$DEFAULT_TOOL"
+    tmux send-keys -t "$SESSION:$name" "$DEFAULT_TOOL --model $model --agent worker" Enter
+    echo "✓ $name created ($model, agent: worker)"
 }
 
 # Send command
@@ -76,11 +78,18 @@ send() {
         return 1
     fi
     
-    # Ghi config mới nhất + launch task bằng run --message (headless)
-    write_worker_config "$DEFAULT_TOOL"
-    tmux send-keys -t "$SESSION:$worker" C-c
-    sleep 0.3
-    tmux send-keys -t "$SESSION:$worker" "cd '$PWD' && $DEFAULT_TOOL run --model $DEFAULT_MODEL --agent worker -- $cmd" Enter
+    # Chờ TUI worker sẵn sàng trước khi gửi
+    local attempts=0
+    while [ $attempts -lt 15 ]; do
+        local screen=$(tmux capture-pane -t "$SESSION:$worker" -p 2>/dev/null)
+        if echo "$screen" | grep -qiE "Ask anything|ctrl\+p commands|Type your message"; then
+            break
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    
+    tmux send-keys -t "$SESSION:$worker" "$cmd" Enter
 }
 
 # Send to all workers

@@ -32,8 +32,8 @@ check_session() {
     fi
 }
 
-# Send command to worker bằng run --message (headless, không TUI)
-# Mỗi task là 1 process mới — không phụ thuộc TUI timing.
+# Send command to worker TUI. Chờ worker ready (composer focus)
+# trước khi gửi để tránh mất lệnh do TUI chưa sẵn sàng.
 send() {
     local target="$1"
     shift
@@ -45,15 +45,18 @@ send() {
         return 1
     fi
     
-    local wk_path="${AGENT_TEAMWORK_HOME:-.}/worker.json"
-    local tool=$(jq -r '.tool // "opencode"' "$wk_path" 2>/dev/null)
-    local model=$(jq -r '.model // "opencode/deepseek-v4-flash-free"' "$wk_path" 2>/dev/null)
+    # Chờ TUI worker hiện prompt "Ask anything" / "ctrl+p commands" (composer đã focus)
+    local attempts=0
+    while [ $attempts -lt 15 ]; do
+        local screen=$(read_screen "$target" 2>/dev/null)
+        if echo "$screen" | grep -qiE "Ask anything|ctrl\+p commands|Type your message"; then
+            break
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
     
-    # Ghi config mới nhất từ worker.json, rồi chạy task bằng run --message
-    write_worker_config "$tool"
-    tmux send-keys -t "$SESSION:$target" C-c  # ngắt process cũ nếu còn
-    sleep 0.3
-    tmux send-keys -t "$SESSION:$target" "cd '$PWD' && $tool run --model $model --agent worker -- $cmd" Enter
+    tmux send-keys -t "$SESSION:$target" "$cmd" Enter
 }
 
 # Read screen
@@ -183,7 +186,9 @@ create_worker() {
     
     tmux new-window -t "$SESSION:" -n "$name"
     tmux set-window-option -t "$SESSION:$name" allow-rename off
-    echo "✓ Worker $name created (agent: worker, ready for tasks)"
+    write_worker_config "$tool"
+    tmux send-keys -t "$SESSION:$name" "$tool --model $model --agent worker" Enter
+    echo "✓ Worker $name created ($model, agent: worker)"
 }
 
 # Kill worker with validation
