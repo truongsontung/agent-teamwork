@@ -18,13 +18,9 @@ STATE_DIR="$PROJECT_DIR/.worker"
 
 mgr_tool=$(jq -r '.tool' "$MGR")
 mgr_model=$(jq -r '.model' "$MGR")
-mgr_perm=$(jq -c '.permission' "$MGR")
 mgr_desc=$(jq -r '.description' "$MGR")
 mgr_mode=$(jq -r '.mode' "$MGR")
 mgr_prompt=$(jq -r '.prompt' "$MGR")
-
-mgr_perm="${mgr_perm//__PROJECT_DIR__/$PROJECT_DIR}"
-mgr_perm="${mgr_perm//__AGENT_HOME__/$SCRIPT_DIR}"
 
 # ── Tạo wrapper ./agent ──────────────────────────────────
 
@@ -35,22 +31,47 @@ exec bash "$SCRIPT_DIR/serve_controller.sh" "\$@"
 WRAPPER
 chmod +x "$PROJECT_DIR/agent"
 
-# ── Cho phép Manager truy cập agent-teamwork (để gọi script) ──
-
-mgr_perm=$(echo "$mgr_perm" | jq --arg d "$SCRIPT_DIR" '.external_directory[$d + "/*"] = "allow"')
-
 dir_for() { [ "$1" = "opencode" ] && echo .opencode || echo .mimocode; }
 mgr_dir=$(dir_for "$mgr_tool")
-
 # ── Ghi config Manager ───────────────────────────────────
 
 mkdir -p "$PROJECT_DIR/$mgr_dir"
-jq -n --argjson p "$mgr_perm" '{"$schema":"https://opencode.ai/config.json",permission:$p}' \
-    > "$PROJECT_DIR/$mgr_dir/opencode.json"
+
+# opencode.json: chỉ external_directory (security), không permission
+jq -n --arg d "$SCRIPT_DIR" '{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "external_directory": {
+      ($d + "/.worker/*"): "deny",
+      ($d + "/*.sh"): "deny",
+      ($d + "/*.json"): "deny"
+    }
+  }
+}' > "$PROJECT_DIR/$mgr_dir/opencode.json"
 
 mkdir -p "$PROJECT_DIR/$mgr_dir/agents"
-printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$mgr_desc" "$mgr_mode" "$mgr_prompt" \
-    > "$PROJECT_DIR/$mgr_dir/agents/manager.md"
+
+# manager.md: permission trong frontmatter → deny hết tool trừ bash
+# model sẽ KHÔNG THẤY read/edit/write trong system prompt
+cat > "$PROJECT_DIR/$mgr_dir/agents/manager.md" <<AGENTEOF
+---
+description: $mgr_desc
+mode: $mgr_mode
+permission:
+  read: deny
+  edit: deny
+  write: deny
+  glob: deny
+  grep: deny
+  task: deny
+  webfetch: deny
+  websearch: deny
+  question: deny
+  bash: allow
+---
+
+$mgr_prompt
+AGENTEOF
 
 wk_desc=$(jq -r '.description' "$WK"); wk_mode=$(jq -r '.mode' "$WK"); wk_prompt=$(jq -r '.prompt' "$WK")
 printf -- '---\ndescription: %s\nmode: %s\n---\n\n%s\n' "$wk_desc" "$wk_mode" "$wk_prompt" \
