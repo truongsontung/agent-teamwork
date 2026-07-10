@@ -52,7 +52,6 @@ permission:
   webfetch: deny
   websearch: deny
   question: deny
-  skill: deny
   bash: deny
 ---
 
