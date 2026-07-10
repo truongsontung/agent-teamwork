@@ -378,7 +378,7 @@ export const AgentTeamwork = async ({ client, $ }) => {
   // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
   const fallback = setInterval(async () => {
     for (const [name, w] of workers) {
-      if (w.status === "dead" || w.status === "error") continue
+      if (w.status === "dead" || w.status === "error" || w.status === "idle") continue
       try {
         const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
         const json = await res.json()
@@ -386,10 +386,9 @@ export const AgentTeamwork = async ({ client, $ }) => {
         if (st === "idle" && w.status !== "idle") {
           handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
-        // Also check permission state for stuck workers
-        if (st === "busy" && w.status === "permission" && !w.pendingPermission) {
-          // Worker might be stuck on permission but SSE missed event
-          w.status = "running"
+        // If session not in status at all → might be idle/completed
+        if (!json[w.sessionId] && w.status === "running") {
+          handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
       } catch {}
     }
