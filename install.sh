@@ -9,11 +9,11 @@ OPENDIR="$HOME/.config/opencode"
 echo "Installing Agent Teamwork to $OPENDIR ..."
 
 mkdir -p "$OPENDIR/plugins" "$OPENDIR/agents"
-rm -f "$OPENDIR/plugins/agent-teamwork.ts"  # remove old TS version
+rm -f "$OPENDIR/plugins/agent-teamwork.js"  # remove old JS version
 
 # ── Plugin ───────────────────────────────────────────────
-cp "$SCRIPT_DIR/opencode/plugins/agent-teamwork.js" "$OPENDIR/plugins/"
-echo "  ✓ plugin → $OPENDIR/plugins/agent-teamwork.js"
+cp "$SCRIPT_DIR/opencode/plugins/agent-teamwork.ts" "$OPENDIR/plugins/"
+echo "  ✓ plugin → $OPENDIR/plugins/agent-teamwork.ts"
 
 # ── Worker config ────────────────────────────────────────
 cp "$SCRIPT_DIR/worker.json" "$OPENDIR/"
@@ -42,7 +42,7 @@ permission:
   webfetch: deny
   websearch: deny
   question: deny
-  bash: allow
+  bash: deny
 ---
 
 $mgr_prompt
@@ -55,4 +55,4 @@ echo ""
 echo "Cấu hình:"
 echo "  Manager model: $OPENDIR/agents/manager.md  (sửa dòng model)"
 echo "  Worker config: $OPENDIR/worker.json        (model, permission)"
-echo "  Plugin code:   $OPENDIR/plugins/agent-teamwork.js"
+echo "  Plugin code:   $OPENDIR/plugins/agent-teamwork.ts"

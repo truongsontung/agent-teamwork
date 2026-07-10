@@ -1,6 +1,7 @@
 // Agent Teamwork Plugin — 1 file thay toàn bộ bash script
 // Quản lý opencode serve workers trực tiếp từ Manager TUI
-import { type Plugin, tool } from "@opencode-ai/plugin"
+// @ts-nocheck
+function tool(def) { return def }
 
 // ── Config ──────────────────────────────────────────────
 
@@ -404,7 +405,7 @@ const toolDefs = {
 
 // ── Plugin entry ────────────────────────────────────────
 
-export const AgentTeamwork: Plugin = async ({ client, $ }) => {
+export const AgentTeamwork = async ({ client, $ }) => {
   _client = client
 
   // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
