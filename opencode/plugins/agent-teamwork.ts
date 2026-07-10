@@ -48,10 +48,8 @@ async function fetchAndCache(w) {
 
 async function pushEvent(msg) {
   if (!_client) return
-  for (let i = 0; i < 3; i++) {
-    try { await _client.tui.appendPrompt({ body: { text: msg } }); await _client.tui.submitPrompt(); return }
-    catch { await new Promise(r => setTimeout(r, 500)) }
-  }
+  try { await _client.tui.appendPrompt({ body: { text: msg } }); await _client.tui.submitPrompt() }
+  catch {}
 }
 
 // ── SSE Monitor ─────────────────────────────────────────
