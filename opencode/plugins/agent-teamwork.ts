@@ -222,6 +222,20 @@ const toolDefs = {
 
       // Start SSE monitor in background
       monitorSSE(name, port).catch(() => {})
+      
+      // Also check immediately — session might already be done
+      setTimeout(() => {
+        fetch(`http://127.0.0.1:${port}/session/${sessionId}/message`)
+          .then(r => r.json())
+          .then((data) => {
+            const msgs = Array.isArray(data) ? data : [data]
+            const lastRole = msgs.length > 0 ? (msgs[msgs.length-1].info || msgs[msgs.length-1]).role : null
+            if (lastRole === "assistant" && w.status !== "idle") {
+              handleIdle(name).catch(() => {})
+            }
+          })
+          .catch(() => {})
+      }, 3000)
 
       return `+${name}`
     },
@@ -248,6 +262,24 @@ const toolDefs = {
         }),
       })
       setStatus(args.name, "running")
+      
+      const wref = workers.get(args.name)
+      if (wref) {
+        setTimeout(() => {
+          fetch(`http://127.0.0.1:${wref.port}/session/${wref.sessionId}/message`)
+            .then(r => r.json())
+            .then((data) => {
+              const msgs = Array.isArray(data) ? data : [data]
+              const last = msgs[msgs.length-1]
+              const lastRole = last ? (last.info || last).role : null
+              if (lastRole === "assistant" && wref.status !== "idle") {
+                handleIdle(args.name).catch(() => {})
+              }
+            })
+            .catch(() => {})
+        }, 5000)
+      }
+      
       return "+"
     },
   }),
