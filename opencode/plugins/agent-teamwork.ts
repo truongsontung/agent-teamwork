@@ -123,9 +123,9 @@ async function pushEvent(msg: string) {
     await _client.tui.appendPrompt({ body: { text: msg } })
     await _client.tui.submitPrompt()
   } catch {
-    // fallback: just append
     _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
   }
+}
 }
 
 async function monitorSSE(name: string, port: number) {
@@ -173,7 +173,7 @@ function handleSSE(name: string, event: any) {
     handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
-    const err = props.error || props.message || ""
+    const err = JSON.stringify(props.error || props.message || props)
     pushEvent(`!ev ${name} error ${err}`)
   } else if (type === "permission.asked" && prevStatus !== "permission") {
     setStatus(name, "permission")
@@ -310,12 +310,14 @@ const toolDefs = {
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) return "(không tìm thấy worker)"
+      if (w.status === "error") return `(worker lỗi: ${w.status})`
+      if (w.status === "dead") return "(worker đã chết)"
       if (w.lastResult) return w.lastResult
       try {
         const txt = require("fs").readFileSync(resultPath(args.name), "utf-8")
         if (txt) { w.lastResult = txt; return txt }
       } catch {}
-      return "(chưa xong — đợi !ev done, không gọi lại)"
+      return `(${args.name}: ${w.status} — đợi !ev ${args.name} done)`
     },
   }),
 
