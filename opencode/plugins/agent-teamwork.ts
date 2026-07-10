@@ -6,7 +6,7 @@ const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 let _client = null
 const workers = new Map()
 
-function nextPort(){let p=PORT_BASE;while(workers.size>0&&[...workers.values()].some(w=>w.port===p))p++;return p}
+function nextPort(){let p=PORT_BASE;while([...workers.values()].some(w=>w.port===p))p++;return p}
 
 // ── Serve ───────────────────────────────────────────────
 
@@ -77,8 +77,7 @@ function monitor(name,port,sid) {
             }
             // ── Permission ──
             else if(ev.type==="permission.asked"){
-              w.pendingPermission=p.id; w._done=false
-              pushEvent(`!ev ${name} permission ${p.permission||"?"}`)
+              if(!w.pendingPermission){w.pendingPermission=p.id;pushEvent(`!ev ${name} permission ${p.permission||"?"}`)}
             }
             else if(ev.type==="permission.replied"){
               w.pendingPermission=undefined; w._done=false
@@ -100,7 +99,7 @@ worker_send:tool({description:"Gửi task (non-blocking).",args:{name:tool.schem
 
 worker_result:tool({description:"Đọc kết quả.",args:{name:tool.schema.string()},async execute(args,ctx){const w=workers.get(args.name);if(!w)return"(không tìm thấy)";if(w.lastResult)return w.lastResult;const t=await fetchAndCache(w);return t||"(chưa có kết quả)"}}),
 
-worker_allow:tool({description:"Duyệt permission.",args:{name:tool.schema.string()},async execute(args,ctx){const w=workers.get(args.name);if(!w)throw new Error("not found");if(!w.pendingPermission)throw new Error("no permission");const r=await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/permissions/${w.pendingPermission}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"allow"})});if(!r.ok)throw new Error(`HTTP ${r.status}`);w.pendingPermission=undefined;return"ok"}}),
+worker_allow:tool({description:"Duyệt permission.",args:{name:tool.schema.string()},async execute(args,ctx){const w=workers.get(args.name);if(!w)throw new Error("not found");if(!w.pendingPermission)throw new Error("no permission");const r=await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/permissions/${w.pendingPermission}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"allow"})});if(!r.ok)throw new Error(`HTTP ${r.status}`);w.pendingPermission=undefined;w._done=false;return"ok"}}),
 
 worker_kill:tool({description:"Hủy worker.",args:{name:tool.schema.string()},async execute(args,ctx){const w=workers.get(args.name);if(!w)return"-";try{await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`,{method:"POST"})}catch{}try{process.kill(w.pid)}catch{}workers.delete(args.name);return`-${args.name}`}}),
 
