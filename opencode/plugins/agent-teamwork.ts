@@ -386,9 +386,10 @@ export const AgentTeamwork = async ({ client, $ }) => {
         if (st === "idle" && w.status !== "idle") {
           handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
-        // Also check if stuck on busy for too long → might be permission
-        if (st === "busy" && w.status === "permission") {
-          // SSE caught it, but fallback confirms
+        // Also check permission state for stuck workers
+        if (st === "busy" && w.status === "permission" && !w.pendingPermission) {
+          // Worker might be stuck on permission but SSE missed event
+          w.status = "running"
         }
       } catch {}
     }
