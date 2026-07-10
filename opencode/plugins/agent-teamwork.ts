@@ -152,8 +152,11 @@ function handleSSE(name: string, event: any, w: any) {
     w.pendingPermission = undefined
   } else if (type === "session.status") {
     const st = props.status && props.status.type
-    if (st === "idle" && prevStatus !== "idle") setStatus(name, "idle")
-    else if (st === "busy" && prevStatus !== "running") setStatus(name, "running")
+    if (st === "idle" && prevStatus !== "idle") {
+      handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
+    } else if (st === "busy" && prevStatus !== "running") {
+      setStatus(name, "running")
+    }
   }
 }
 
@@ -222,20 +225,6 @@ const toolDefs = {
 
       // Start SSE monitor in background
       monitorSSE(name, port).catch(() => {})
-      
-      // Also check immediately — session might already be done
-      setTimeout(() => {
-        fetch(`http://127.0.0.1:${port}/session/${sessionId}/message`)
-          .then(r => r.json())
-          .then((data) => {
-            const msgs = Array.isArray(data) ? data : [data]
-            const lastRole = msgs.length > 0 ? (msgs[msgs.length-1].info || msgs[msgs.length-1]).role : null
-            if (lastRole === "assistant" && w.status !== "idle") {
-              handleIdle(name).catch(() => {})
-            }
-          })
-          .catch(() => {})
-      }, 3000)
 
       return `+${name}`
     },
@@ -262,59 +251,7 @@ const toolDefs = {
         }),
       })
       setStatus(args.name, "running")
-      
-      const wref = workers.get(args.name)
-      if (wref) {
-        setTimeout(() => {
-          fetch(`http://127.0.0.1:${wref.port}/session/${wref.sessionId}/message`)
-            .then(r => r.json())
-            .then((data) => {
-              const msgs = Array.isArray(data) ? data : [data]
-              const last = msgs[msgs.length-1]
-              const lastRole = last ? (last.info || last).role : null
-              if (lastRole === "assistant" && wref.status !== "idle") {
-                handleIdle(args.name).catch(() => {})
-              }
-            })
-            .catch(() => {})
-        }, 5000)
-      }
-      
       return "+"
-    },
-  }),
-
-  worker_send_wait: tool({
-    description: "Gửi task cho worker và ĐỢI kết quả (blocking). Trả về text kết quả khi worker xong.",
-    args: {
-      name: tool.schema.string().describe("Tên worker"),
-      task: tool.schema.string().describe("Nhiệm vụ"),
-    },
-    async execute(args, ctx) {
-      const w = workers.get(args.name)
-      if (!w) throw new Error(`Worker '${args.name}' not found`)
-
-      const [provider, modelId] = w.model.includes("/") ? w.model.split("/") : ["opencode", w.model]
-
-      const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          parts: [{ type: "text", text: args.task }],
-          model: { providerID: provider, modelID: modelId },
-        }),
-      })
-      const data = await res.json()
-      const msgs = Array.isArray(data) ? data : [data]
-      const text = msgs
-        .flatMap((m) => (m.parts || []).filter((p) => p.type === "text").map((p) => p.text))
-        .join("\n").trim()
-      if (text) {
-        w.lastResult = text
-        try { require("fs").writeFileSync(resultPath(args.name), text) } catch {}
-      }
-      setStatus(args.name, "idle")
-      return text || "(worker không trả lời)"
     },
   }),
 
