@@ -7,14 +7,8 @@ function tool(def) { return def }
 
 const PORT_BASE = 4091
 const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
+const MAX_WORKERS = 5
 let _client: any = null  // SDK client, set at plugin init
-const WORKER_CONFIG = (() => {
-  try {
-    const home = process.env.AGENT_TEAMWORK_HOME || `${process.env.HOME || "~"}/.config/opencode`
-    const txt = require("fs").readFileSync(`${home}/worker.json`, "utf-8")
-    return JSON.parse(txt)
-  } catch { return {} }
-})()
 
 // ── Types ───────────────────────────────────────────────
 
@@ -72,28 +66,21 @@ function nextPort(): number {
 
 // ── Serve lifecycle ─────────────────────────────────────
 
-function writeWorkerConfig(name: string, port: number): string {
-  const dir = `${statusDir}/configs`
-  try { require("fs").mkdirSync(dir, { recursive: true }) } catch {}
-  const cfg = {
-    "$schema": "https://opencode.ai/config.json",
-    permission: WORKER_CONFIG.permission || { bash: "allow", read: "allow", edit: "allow", write: "allow" },
-  }
-  const path = `${dir}/${name}.json`
-  require("fs").writeFileSync(path, JSON.stringify(cfg))
-  return path
-}
-
-async function startServe(port: number, name: string): Promise<number> {
-  const cfgPath = writeWorkerConfig(name, port)
+async function startServe(port: number): Promise<number> {
   const proc = Bun.spawn(
     ["opencode", "serve", "--port", String(port), "--hostname", "127.0.0.1"],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, OPENCODE_CONFIG: cfgPath },
-    }
+    { stdout: "pipe", stderr: "pipe" }
   )
+  for (let i = 0; i < 30; i++) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/session/status`, { signal: AbortSignal.timeout(2000) })
+      return proc.pid
+    } catch {}
+    await Bun.sleep(1000)
+  }
+  proc.kill()
+  throw new Error(`Serve not ready on port ${port}`)
+}
   // Wait for serve ready
   for (let i = 0; i < 30; i++) {
     try {
@@ -245,11 +232,10 @@ const toolDefs = {
     async execute(args, ctx) {
       const name = args.name
       if (workers.has(name)) throw new Error(`Worker '${name}' already exists`)
-      const max = WORKER_CONFIG.max_workers || 5
-      if (workers.size >= max) throw new Error(`Max ${max} workers`)
+      if (workers.size >= MAX_WORKERS) throw new Error(`Max ${MAX_WORKERS} workers`)
 
       const port = nextPort()
-      const pid = await startServe(port, name)
+      const pid = await startServe(port)
       const agent = args.agent || "build"
       const sessionId = await createSession(port, name, agent)
 
@@ -383,7 +369,6 @@ const toolDefs = {
       try { require("fs").rmSync(statusPath(args.name), { force: true }) } catch {}
       try { require("fs").rmSync(resultPath(args.name), { force: true }) } catch {}
       try { require("fs").rmSync(permPath(args.name), { force: true }) } catch {}
-      try { require("fs").rmSync(`${statusDir}/configs/${args.name}.json`, { force: true }) } catch {}
       return `-${args.name}`
     },
   }),

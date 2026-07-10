@@ -1,29 +1,4 @@
 {
   "model": "deepseek/deepseek-v4-pro",
-  "max_workers": 5,
-  "port_base": 4091,
-  "timeout": 300,
-  "available_models": [
-    "deepseek/deepseek-chat",
-    "deepseek/deepseek-v4-flash",
-    "deepseek/deepseek-v4-pro"
-  ],
-  "permission": {
-    "bash": "allow",
-    "read": "allow",
-    "edit": "allow",
-    "write": "allow",
-    "glob": "allow",
-    "grep": "allow",
-    "task": "allow",
-    "webfetch": "deny",
-    "websearch": "deny",
-    "question": "deny",
-    "external_directory": {
-      "/tmp/*": "deny",
-      "__PROJECT_DIR__/*": "allow",
-      "/root/*": "allow",
-      "/opt/*": "allow"
-    }
-  }
+  "max_workers": 5
 }
