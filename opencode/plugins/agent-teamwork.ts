@@ -1,208 +1,85 @@
-// Agent Teamwork Plugin — 1 file thay toàn bộ bash script
-// Quản lý opencode serve workers trực tiếp từ Manager TUI
+// Agent Teamwork Plugin
+// Manager tạo worker → send → wait → kill. Không SSE, không !ev.
 import { z } from "zod"
 function tool(def) { return def }
 tool.schema = z
 
-// ── Config ──────────────────────────────────────────────
-
 const PORT_BASE = 4091
 const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 const MAX_WORKERS = 5
-let _client: any = null  // SDK client, set at plugin init
-
-// ── State ───────────────────────────────────────────────
+const DEFAULT_TIMEOUT = 120
 
 const workers = new Map()
 const statusDir = `${process.env.PROJECT_DIR || process.cwd()}/.worker`
 
-function statusPath(name: string) { return `${statusDir}/_${name}.status` }
-function resultPath(name: string) { return `${statusDir}/_${name}.result` }
-function permPath(name: string)   { return `${statusDir}/_${name}.perm` }
+// ── Helpers ─────────────────────────────────────────────
 
-function setStatus(name: string, st: string) {
-  const w = workers.get(name)
-  if (w) w.status = st
-  try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
-  require("fs").writeFileSync(statusPath(name), st)
-  writeStatusLog()
-}
-
-function writeStatusLog() {
-  const lines = []
-  const now = new Date().toLocaleTimeString()
-  for (const [n, w] of workers) {
-    const extra = w.pendingPermission ? ` perm:${w.pendingPermission}` : ""
-    lines.push(`${now} ${n}=${w.status}${extra}`)
-  }
-  if (lines.length > 0) {
-    try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
-    require("fs").writeFileSync(`${statusDir}/status.log`, lines.join("\n") + "\n")
-  }
-}
-
-// ── Port allocation ─────────────────────────────────────
-
-function nextPort(): number {
+function nextPort() {
   let p = PORT_BASE
-  while (true) {
-    const used = [...workers.values()].some(w => w.port === p)
-    if (!used) return p
-    p++
-  }
+  while ([...workers.values()].some(w => w.port === p)) p++
+  return p
 }
 
-// ── Serve lifecycle ─────────────────────────────────────
+function setStatus(n, s) {
+  const w = workers.get(n); if (w) w.status = s
+  try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
+  require("fs").writeFileSync(`${statusDir}/_${n}.status`, s)
+}
 
-async function startServe(port: number): Promise<number> {
-  const proc = Bun.spawn(
-    ["opencode", "serve", "--port", String(port), "--hostname", "127.0.0.1"],
-    { stdout: "pipe", stderr: "pipe" }
-  )
+async function startServe(port) {
+  const proc = Bun.spawn(["opencode", "serve", "--port", String(port), "--hostname", "127.0.0.1"], { stdout: "pipe", stderr: "pipe" })
   for (let i = 0; i < 30; i++) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/session/status`, { signal: AbortSignal.timeout(2000) })
-      return proc.pid
-    } catch {}
+    try { await fetch(`http://127.0.0.1:${port}/session/status`, { signal: AbortSignal.timeout(2000) }); return proc.pid }
+    catch {}
     await Bun.sleep(1000)
   }
   proc.kill()
-  throw new Error(`Serve not ready on port ${port}`)
+  throw new Error(`Serve not ready`)
 }
 
-async function createSession(port: number, name: string, agent: string): Promise<string> {
+async function createSession(port, name, agent) {
   const res = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: name, agent }),
   })
-  const json = await res.json() as any
-  return json.id
+  return (await res.json()).id
 }
 
-// ── SSE Monitor (per worker) ────────────────────────────
+function extractText(data) {
+  const msgs = Array.isArray(data) ? data : [data]
+  return msgs.flatMap(m => {
+    const parts = m.parts || (Array.isArray(m) ? m : [m])
+    return parts.filter(p => p && p.type === "text").map(p => p.text)
+  }).join("\n").trim()
+}
 
-async function pushEvent(msg: string) {
-  if (!_client) return
-  try {
-    await _client.tui.appendPrompt({ body: { text: msg } })
-    await _client.tui.submitPrompt()
-  } catch {
-    _client.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
+async function fetchResult(w) {
+  const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
+  const text = extractText(await res.json())
+  if (text) {
+    w.lastResult = text
+    try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
+    require("fs").writeFileSync(`${statusDir}/_${w.name}.result`, text)
   }
+  return text
 }
 
-async function monitorSSE(name: string, port: number) {
-  while (true) {
-    // Check if worker process still alive
-    const w = workers.get(name)
-    if (!w) return
-    try { process.kill(w.pid, 0) } catch { setStatus(name, "dead"); return }
-
+async function pollWait(w, timeout) {
+  const start = Date.now()
+  while (Date.now() - start < timeout * 1000) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/event`)
-      if (!res.ok) { await Bun.sleep(3000); continue }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ""
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split("\n")
-        buf = lines.pop() || ""
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue
-          let json: any
-          try { json = JSON.parse(line.slice(6)) } catch { continue }
-          handleSSE(name, json, w)
-        }
+      const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
+      const json = await res.json()
+      const st = json[w.sessionId] && json[w.sessionId].type
+      if (st === "idle" || !json[w.sessionId]) {
+        setStatus(w.name, "idle")
+        return await fetchResult(w)
       }
-    } catch {
-      // reconnect
-    }
-    await Bun.sleep(2000)
+    } catch {}
+    await new Promise(r => setTimeout(r, 2000))
   }
-}
-
-function handleSSE(name: string, event: any, w: any) {
-  const type = event.type
-  const props = event.properties || {}
-  // Only process events for THIS worker's session
-  if (props.sessionID && props.sessionID !== w.sessionId) return
-  const prevStatus = w.status || ""
-
-  if (type === "session.idle" && !w._idleLock) {
-    handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
-  } else if (type === "session.error" && prevStatus !== "error") {
-    setStatus(name, "error")
-    const err = JSON.stringify(props.error || props.message || props)
-    pushEvent(`!ev ${name} error ${err}`)
-  } else if (type === "permission.asked" && !w._permResolved) {
-    setStatus(name, "permission")
-    w.pendingPermission = props.id
-    w._permResolved = true
-    try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
-    const perm = props.permission || "?"
-    const pats = (props.patterns || []).join(",")
-    pushEvent(`!ev ${name} permission ${perm} [${pats}]`)
-  } else if (type === "permission.replied") {
-    setStatus(name, "running")
-    w.pendingPermission = undefined
-    w._permResolved = false
-  } else if (type === "session.status") {
-    const st = props.status && props.status.type
-    if (st === "idle" && prevStatus !== "idle") {
-      handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
-    } else if (st === "busy" && prevStatus !== "running") {
-      setStatus(name, "running")
-    }
-  }
-}
-
-function saveResult(name: string) {
-  const w = workers.get(name)
-  if (!w) return
-  fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
-    .then(r => r.json())
-    .then((data: any) => {
-      const msgs = Array.isArray(data) ? data : [data]
-      const text = msgs
-        .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
-        .join("\n").trim()
-      if (text) {
-        w.lastResult = text
-        try { require("fs").writeFileSync(resultPath(name), text) } catch {}
-      }
-    })
-    .catch(() => {})
-}
-
-async function handleIdle(name: string) {
-  const w = workers.get(name)
-  if (!w || w._idleLock) return
-  w._idleLock = true
-  setStatus(name, "idle")
-  // Fetch result
-  try {
-    const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
-    const data = await res.json()
-    const msgs = Array.isArray(data) ? data : [data]
-    const text = msgs
-      .flatMap((m) => {
-        const parts = m.parts || (Array.isArray(m) ? m : [m])
-        return parts.filter((p) => p && p.type === "text").map((p) => p.text)
-      })
-      .join("\n").trim()
-    if (text) {
-      w.lastResult = text
-      try { require("fs").writeFileSync(resultPath(name), text) } catch {}
-    }
-  } catch {}
-  pushEvent(`!ev ${name} done`)
-  w._idleLock = false
+  throw new Error(`Timeout waiting for ${w.name}`)
 }
 
 // ── Tools ───────────────────────────────────────────────
@@ -210,145 +87,86 @@ async function handleIdle(name: string) {
 const toolDefs = {
 
   worker_create: tool({
-    description: "Tạo worker mới (opencode serve riêng). Worker có context độc lập, dùng để xử lý task song song.",
+    description: "Tạo worker (openode serve riêng). Dùng agent build (đủ tool) hoặc plan (chỉ đọc).",
     args: {
-      name: tool.schema.string().describe("Tên worker (vd: Worker-API)"),
+      name: tool.schema.string().describe("Tên worker"),
       model: tool.schema.string().optional().describe(`Model, mặc định ${DEFAULT_MODEL}`),
-      agent: tool.schema.string().optional().describe("Agent: build (mặc định, đầy đủ tool) hoặc plan (chỉ đọc)"),
+      agent: tool.schema.string().optional().describe("build | plan. Mặc định build."),
     },
     async execute(args, ctx) {
       const name = args.name
       if (workers.has(name)) throw new Error(`Worker '${name}' already exists`)
       if (workers.size >= MAX_WORKERS) throw new Error(`Max ${MAX_WORKERS} workers`)
-
       const port = nextPort()
       const pid = await startServe(port)
       const agent = args.agent || "build"
       const sessionId = await createSession(port, name, agent)
-
-      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running", _permResolved: false, _idleLock: false }
-      workers.set(name, w)
+      workers.set(name, { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" })
       setStatus(name, "running")
-
-      // Start SSE monitor in background
-      monitorSSE(name, port).catch(() => {})
-
       return `+${name}`
     },
   }),
 
   worker_send: tool({
-    description: "Gửi task cho worker (non-blocking). Worker sẽ xử lý và bot sẽ báo !ev khi xong.",
+    description: "Gửi task cho worker (non-blocking). Dùng worker_wait để lấy kết quả.",
     args: {
       name: tool.schema.string().describe("Tên worker"),
-      task: tool.schema.string().describe("Nhiệm vụ mô tả chi tiết"),
+      task: tool.schema.string().describe("Nhiệm vụ chi tiết"),
     },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) throw new Error(`Worker '${args.name}' not found`)
-
       const [provider, modelId] = w.model.includes("/") ? w.model.split("/") : ["opencode", w.model]
-
       await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/prompt_async`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          parts: [{ type: "text", text: args.task }],
-          model: { providerID: provider, modelID: modelId },
-        }),
+        body: JSON.stringify({ parts: [{ type: "text", text: args.task }], model: { providerID: provider, modelID: modelId } }),
       })
       setStatus(args.name, "running")
       return "+"
     },
   }),
 
-  worker_status: tool({
-    description: "Đọc trạng thái worker từ cache. CHỈ dùng khi user hỏi, KHÔNG dùng để chờ.",
-    args: {
-      name: tool.schema.string().optional().describe("Tên worker (bỏ trống = tất cả)"),
-    },
-    async execute(args, ctx) {
-      if (args.name) {
-        const w = workers.get(args.name)
-        if (!w) return "dead"
-        return w.status
-      }
-      if (workers.size === 0) return "(none)"
-      return [...workers.entries()].map(([n, w]) => `${n} ${w.status}`).join("\n")
-    },
-  }),
-
-  worker_result: tool({
-    description: "Đọc kết quả worker. Fetch từ serve nếu chưa có cache.",
+  worker_wait: tool({
+    description: "Đợi worker hoàn thành và trả kết quả. Blocking, có timeout.",
     args: {
       name: tool.schema.string().describe("Tên worker"),
-    },
-    async execute(args, ctx) {
-      const w = workers.get(args.name)
-      if (!w) return "(không tìm thấy worker)"
-      if (w.lastResult) return w.lastResult
-      try {
-        const txt = require("fs").readFileSync(resultPath(args.name), "utf-8")
-        if (txt) { w.lastResult = txt; return txt }
-      } catch {}
-      // Fetch directly from serve as fallback
-      try {
-        const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
-        const data = await res.json()
-        const msgs = Array.isArray(data) ? data : [data]
-        const text = msgs
-          .flatMap((m) => {
-            const parts = m.parts || (Array.isArray(m) ? m : [m])
-            return parts.filter((p) => p && p.type === "text").map((p) => p.text)
-          })
-          .join("\n").trim()
-        if (text) {
-          w.lastResult = text
-          try { require("fs").writeFileSync(resultPath(args.name), text) } catch {}
-          return text
-        }
-      } catch {}
-      return `(${args.name}: ${w.status} — chưa có kết quả)`
-    },
-  }),
-
-  worker_allow: tool({
-    description: "Chấp nhận permission đang chờ của worker.",
-    args: {
-      name: tool.schema.string().describe("Tên worker"),
+      timeout: tool.schema.number().optional().describe(`Timeout giây, mặc định ${DEFAULT_TIMEOUT}`),
     },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) throw new Error(`Worker '${args.name}' not found`)
-      if (!w.pendingPermission) throw new Error("No pending permission")
+      const result = await pollWait(w, args.timeout || DEFAULT_TIMEOUT)
+      return result || "(không có kết quả)"
+    },
+  }),
 
+  worker_allow: tool({
+    description: "Duyệt permission cho worker.",
+    args: { name: tool.schema.string().describe("Tên worker") },
+    async execute(args, ctx) {
+      const w = workers.get(args.name)
+      if (!w) throw new Error(`Worker '${args.name}' not found`)
+      if (!w.pendingPermission) throw new Error("No pending permission")
       const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/permissions/${w.pendingPermission}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "allow" }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "allow" }),
       })
       if (!res.ok) throw new Error(`Allow failed: HTTP ${res.status}`)
       w.pendingPermission = undefined
-      w._permResolved = false
       setStatus(args.name, "running")
       return "ok"
     },
   }),
 
   worker_deny: tool({
-    description: "Từ chối permission đang chờ của worker.",
-    args: {
-      name: tool.schema.string().describe("Tên worker"),
-    },
+    description: "Từ chối permission cho worker.",
+    args: { name: tool.schema.string().describe("Tên worker") },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) throw new Error(`Worker '${args.name}' not found`)
       if (!w.pendingPermission) throw new Error("No pending permission")
-
       const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/permissions/${w.pendingPermission}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "deny" }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "deny" }),
       })
       if (!res.ok) throw new Error(`Deny failed: HTTP ${res.status}`)
       w.pendingPermission = undefined
@@ -358,22 +176,15 @@ const toolDefs = {
   }),
 
   worker_kill: tool({
-    description: "Hủy worker và dọn dẹp.",
-    args: {
-      name: tool.schema.string().describe("Tên worker"),
-    },
+    description: "Hủy worker.",
+    args: { name: tool.schema.string().describe("Tên worker") },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) throw new Error(`Worker '${args.name}' not found`)
-
       try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
       try { process.kill(w.pid) } catch {}
       try { process.kill(w.pid, "SIGKILL") } catch {}
-
       workers.delete(args.name)
-      try { require("fs").rmSync(statusPath(args.name), { force: true }) } catch {}
-      try { require("fs").rmSync(resultPath(args.name), { force: true }) } catch {}
-      try { require("fs").rmSync(permPath(args.name), { force: true }) } catch {}
       return `-${args.name}`
     },
   }),
@@ -383,14 +194,27 @@ const toolDefs = {
     args: {},
     async execute(args, ctx) {
       const names = [...workers.keys()]
-      for (const name of names) {
-        const w = workers.get(name)
+      for (const n of names) {
+        const w = workers.get(n)
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
-      const count = workers.size
+      const c = workers.size
       workers.clear()
-      return String(count)
+      return String(c)
+    },
+  }),
+
+  worker_status: tool({
+    description: "Xem trạng thái worker (chỉ khi user hỏi).",
+    args: { name: tool.schema.string().optional().describe("Tên worker") },
+    async execute(args, ctx) {
+      if (args.name) {
+        const w = workers.get(args.name)
+        return w ? w.status : "dead"
+      }
+      if (workers.size === 0) return "(none)"
+      return [...workers.entries()].map(([n, w]) => `${n} ${w.status}`).join("\n")
     },
   }),
 }
@@ -398,36 +222,49 @@ const toolDefs = {
 // ── Plugin entry ────────────────────────────────────────
 
 export const AgentTeamwork = async ({ client, $ }) => {
-  _client = client
-
-  // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
-  const fallback = setInterval(async () => {
-    for (const [name, w] of workers) {
-      if (w.status === "dead" || w.status === "error" || w._idleLock) continue
-      try {
-        const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
-        const json = await res.json()
-        const st = json[w.sessionId] && json[w.sessionId].type
-        if (st === "idle" || !json[w.sessionId]) {
-          handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
-        }
-      } catch {}
-    }
-  }, 5000)
+  // SSE monitor riêng cho permission detection
+  for (const [, w] of workers) {
+    const port = w.port
+    ;(async () => {
+      while (workers.has(w.name)) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/event`)
+          if (!res.ok) { await Bun.sleep(3000); continue }
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let buf = ""
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split("\n"); buf = lines.pop() || ""
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue
+              let json; try { json = JSON.parse(line.slice(6)) } catch { continue }
+              const props = json.properties || {}
+              if (props.sessionID !== w.sessionId) continue
+              if (json.type === "permission.asked") {
+                w.pendingPermission = props.id
+                setStatus(w.name, "permission")
+                client.tui.appendPrompt({ body: { text: `!ev ${w.name} permission ${props.permission || "?"}` } }).catch(() => {})
+                client.tui.submitPrompt().catch(() => {})
+              }
+            }
+          }
+        } catch { await Bun.sleep(2000) }
+      }
+    })().catch(() => {})
+  }
 
   return {
     dispose: async () => {
-      clearInterval(fallback)
-      const names = [...workers.keys()]
-      for (const name of names) {
-        const w = workers.get(name)
+      for (const [n, w] of workers) {
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
       workers.clear()
       try { require("fs").rmSync(statusDir, { recursive: true, force: true }) } catch {}
     },
-
     tool: toolDefs,
   }
 }
