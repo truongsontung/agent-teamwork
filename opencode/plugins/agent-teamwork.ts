@@ -140,9 +140,10 @@ function handleSSE(name: string, event: any, w: any) {
     setStatus(name, "error")
     const err = JSON.stringify(props.error || props.message || props)
     pushEvent(`!ev ${name} error ${err}`)
-  } else if (type === "permission.asked" && prevStatus !== "permission") {
+  } else if (type === "permission.asked" && !w._permResolved) {
     setStatus(name, "permission")
     w.pendingPermission = props.id
+    w._permResolved = true
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     const perm = props.permission || "?"
     const pats = (props.patterns || []).join(",")
@@ -150,6 +151,7 @@ function handleSSE(name: string, event: any, w: any) {
   } else if (type === "permission.replied") {
     setStatus(name, "running")
     w.pendingPermission = undefined
+    w._permResolved = false
   } else if (type === "session.status") {
     const st = props.status && props.status.type
     if (st === "idle" && prevStatus !== "idle") {
@@ -219,7 +221,7 @@ const toolDefs = {
       const agent = args.agent || "build"
       const sessionId = await createSession(port, name, agent)
 
-      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
+      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running", _permResolved: false }
       workers.set(name, w)
       setStatus(name, "running")
 
@@ -307,6 +309,7 @@ const toolDefs = {
       })
       if (!res.ok) throw new Error(`Allow failed: HTTP ${res.status}`)
       w.pendingPermission = undefined
+      w._permResolved = false
       setStatus(args.name, "running")
       return "ok"
     },
