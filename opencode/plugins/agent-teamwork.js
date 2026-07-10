@@ -1,44 +1,53 @@
 // Agent Teamwork Plugin — 1 file thay toàn bộ bash script
 // Quản lý opencode serve workers trực tiếp từ Manager TUI
-
-// tool() identity wrapper (no import needed)
+// @ts-nocheck
 function tool(def) { return def }
 
 // ── Config ──────────────────────────────────────────────
 
 const PORT_BASE = 4091
 const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
-let _client = null  // SDK client, set at plugin init
+let _client: any = null  // SDK client, set at plugin init
 const WORKER_CONFIG = (() => {
   try {
     const home = process.env.AGENT_TEAMWORK_HOME || `${process.env.HOME || "~"}/.config/opencode`
     const txt = require("fs").readFileSync(`${home}/worker.json`, "utf-8")
     return JSON.parse(txt)
   } catch { return {} }
-// end Worker)()
+})()
 
 // ── Types ───────────────────────────────────────────────
 
+interface Worker {
+  name: string
+  port: number
+  pid: number
+  sessionId: string
+  model: string
+  status: string
+  lastResult?: string
+  pendingPermission?: string
+}
 
 // ── State ───────────────────────────────────────────────
 
-const workers = new Map()
+const workers = new Map<string, Worker>()
 const statusDir = `${process.env.PROJECT_DIR || process.cwd()}/.worker`
 
-function statusPath(name) { return `${statusDir}/_${name}.status` }
-function resultPath(name) { return `${statusDir}/_${name}.result` }
-function permPath(name)   { return `${statusDir}/_${name}.perm` }
+function statusPath(name: string) { return `${statusDir}/_${name}.status` }
+function resultPath(name: string) { return `${statusDir}/_${name}.result` }
+function permPath(name: string)   { return `${statusDir}/_${name}.perm` }
 
-function setStatus(name, st) {
+function setStatus(name: string, st: string) {
   const w = workers.get(name)
   if (w) w.status = st
   try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
   require("fs").writeFileSync(statusPath(name), st)
   writeStatusLog()
-// end Worker
+}
 
 function writeStatusLog() {
-  const lines = []
+  const lines: string[] = []
   const now = new Date().toLocaleTimeString()
   for (const [n, w] of workers) {
     const extra = w.pendingPermission ? ` perm:${w.pendingPermission}` : ""
@@ -48,22 +57,22 @@ function writeStatusLog() {
     try { require("fs").mkdirSync(statusDir, { recursive: true }) } catch {}
     require("fs").writeFileSync(`${statusDir}/status.log`, lines.join("\n") + "\n")
   }
-// end Worker
+}
 
 // ── Port allocation ─────────────────────────────────────
 
-function nextPort() {
+function nextPort(): number {
   let p = PORT_BASE
   while (true) {
     const used = [...workers.values()].some(w => w.port === p)
     if (!used) return p
     p++
   }
-// end Worker
+}
 
 // ── Serve lifecycle ─────────────────────────────────────
 
-function writeWorkerConfig(name, port) {
+function writeWorkerConfig(name: string, port: number): string {
   const dir = `${statusDir}/configs`
   try { require("fs").mkdirSync(dir, { recursive: true }) } catch {}
   const cfg = {
@@ -73,9 +82,9 @@ function writeWorkerConfig(name, port) {
   const path = `${dir}/${name}.json`
   require("fs").writeFileSync(path, JSON.stringify(cfg))
   return path
-// end Worker
+}
 
-async function startServe(port, name) {
+async function startServe(port: number, name: string): Promise<number> {
   const cfgPath = writeWorkerConfig(name, port)
   const proc = Bun.spawn(
     ["opencode", "serve", "--port", String(port), "--hostname", "127.0.0.1"],
@@ -95,32 +104,32 @@ async function startServe(port, name) {
   }
   proc.kill()
   throw new Error(`Serve not ready on port ${port}`)
-// end Worker
+}
 
-async function createSession(port, name) {
+async function createSession(port: number, name: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: name }),
   })
-  const json = await res.json() 
+  const json = await res.json() as any
   return json.id
-// end Worker
+}
 
 // ── SSE Monitor (per worker) ────────────────────────────
 
-async function pushEvent(msg) {
+async function pushEvent(msg: string) {
   if (!_client) return
   try {
     await _client.tui.appendPrompt({ body: { text: msg } })
     await _client.tui.submitPrompt()
   } catch {
-    _client && _client.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
+    _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
   }
-// end Worker
-// end Worker
+}
+}
 
-async function monitorSSE(name, port) {
+async function monitorSSE(name: string, port: number) {
   while (true) {
     // Check if worker process still alive
     const w = workers.get(name)
@@ -130,7 +139,7 @@ async function monitorSSE(name, port) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/event`)
       if (!res.ok) { await Bun.sleep(3000); continue }
-      const reader = res.body.getReader()
+      const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buf = ""
 
@@ -143,7 +152,7 @@ async function monitorSSE(name, port) {
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue
-          let json
+          let json: any
           try { json = JSON.parse(line.slice(6)) } catch { continue }
           handleSSE(name, json)
         }
@@ -153,13 +162,13 @@ async function monitorSSE(name, port) {
     }
     await Bun.sleep(2000)
   }
-// end Worker
+}
 
-function handleSSE(name, event) {
+function handleSSE(name: string, event: any) {
   const type = event.type
   const props = event.properties || {}
   const w = workers.get(name)
-  const prevStatus = w && w.status || ""
+  const prevStatus = w?.status || ""
 
   if (type === "session.idle" && prevStatus !== "idle") {
     handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
@@ -178,21 +187,21 @@ function handleSSE(name, event) {
     setStatus(name, "running")
     if (w) w.pendingPermission = undefined
   } else if (type === "session.status") {
-    const st = props.status && props.status.type || ""
+    const st = props.status?.type
     if (st === "idle" && prevStatus !== "idle") setStatus(name, "idle")
     else if (st === "busy" && prevStatus !== "running") setStatus(name, "running")
   }
-// end Worker
+}
 
-function saveResult(name) {
+function saveResult(name: string) {
   const w = workers.get(name)
   if (!w) return
   fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
     .then(r => r.json())
-    .then((data) => {
+    .then((data: any) => {
       const msgs = Array.isArray(data) ? data : [data]
       const text = msgs
-        .flatMap((m) => (m.parts || []).filter((p) => p.type === "text").map((p) => p.text))
+        .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
         .join("\n").trim()
       if (text) {
         w.lastResult = text
@@ -200,9 +209,9 @@ function saveResult(name) {
       }
     })
     .catch(() => {})
-// end Worker
+}
 
-async function handleIdle(name) {
+async function handleIdle(name: string) {
   const w = workers.get(name)
   if (!w || w.status === "idle") return
   setStatus(name, "idle")
@@ -212,7 +221,7 @@ async function handleIdle(name) {
     const data = await res.json()
     const msgs = Array.isArray(data) ? data : [data]
     const text = msgs
-      .flatMap((m) => (m.parts || []).filter((p) => p.type === "text").map((p) => p.text))
+      .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
       .join("\n").trim()
     if (text) {
       w.lastResult = text
@@ -220,7 +229,7 @@ async function handleIdle(name) {
     }
   } catch {}
   pushEvent(`!ev ${name} done`)
-// end Worker
+}
 
 // ── Tools ───────────────────────────────────────────────
 
@@ -242,7 +251,7 @@ const toolDefs = {
       const pid = await startServe(port, name)
       const sessionId = await createSession(port, name)
 
-      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
+      const w: Worker = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
       workers.set(name, w)
       setStatus(name, "running")
 
@@ -383,7 +392,7 @@ const toolDefs = {
     async execute(args, ctx) {
       const names = [...workers.keys()]
       for (const name of names) {
-        const w = workers.get(name)
+        const w = workers.get(name)!
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
@@ -392,7 +401,7 @@ const toolDefs = {
       return String(count)
     },
   }),
-// end Worker
+}
 
 // ── Plugin entry ────────────────────────────────────────
 
@@ -406,7 +415,7 @@ export const AgentTeamwork = async ({ client, $ }) => {
       try {
         const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
         const json = await res.json()
-        const st = json[w.sessionId] && json[w.sessionId].type
+        const st = json[w.sessionId]?.type
         if (st === "idle" && w.status !== "idle") {
           handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
@@ -423,7 +432,7 @@ export const AgentTeamwork = async ({ client, $ }) => {
       clearInterval(fallback)
       const names = [...workers.keys()]
       for (const name of names) {
-        const w = workers.get(name)
+        const w = workers.get(name)!
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
@@ -433,4 +442,4 @@ export const AgentTeamwork = async ({ client, $ }) => {
 
     tool: toolDefs,
   }
-// end Worker
+}
