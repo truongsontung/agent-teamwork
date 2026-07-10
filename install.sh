@@ -11,6 +11,16 @@ echo "Installing Agent Teamwork to $OPENDIR ..."
 mkdir -p "$OPENDIR/plugins" "$OPENDIR/agents"
 rm -f "$OPENDIR/plugins/agent-teamwork.js"  # remove old JS version
 
+# Ensure plugin auto-loading is not blocked by empty plugin array
+python3 -c "
+import json, os
+cfg = '$OPENDIR/opencode.json'
+if os.path.exists(cfg):
+    with open(cfg) as f: c = json.load(f)
+    if c.get('plugin') == []: del c['plugin']
+    with open(cfg, 'w') as f: json.dump(c, f, indent=2)
+" 2>/dev/null || true
+
 # ── Plugin ───────────────────────────────────────────────
 cp "$SCRIPT_DIR/opencode/plugins/agent-teamwork.ts" "$OPENDIR/plugins/"
 echo "  ✓ plugin → $OPENDIR/plugins/agent-teamwork.ts"
