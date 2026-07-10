@@ -106,11 +106,11 @@ async function startServe(port: number, name: string): Promise<number> {
   throw new Error(`Serve not ready on port ${port}`)
 }
 
-async function createSession(port: number, name: string): Promise<string> {
+async function createSession(port: number, name: string, agent: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: name }),
+    body: JSON.stringify({ title: name, agent }),
   })
   const json = await res.json() as any
   return json.id
@@ -240,6 +240,7 @@ const toolDefs = {
     args: {
       name: tool.schema.string().describe("Tên worker (vd: Worker-API)"),
       model: tool.schema.string().optional().describe(`Model, mặc định ${DEFAULT_MODEL}`),
+      agent: tool.schema.string().optional().describe("Agent: build (mặc định, đầy đủ tool) hoặc plan (chỉ đọc)"),
     },
     async execute(args, ctx) {
       const name = args.name
@@ -249,7 +250,8 @@ const toolDefs = {
 
       const port = nextPort()
       const pid = await startServe(port, name)
-      const sessionId = await createSession(port, name)
+      const agent = args.agent || "build"
+      const sessionId = await createSession(port, name, agent)
 
       const w: Worker = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
       workers.set(name, w)
