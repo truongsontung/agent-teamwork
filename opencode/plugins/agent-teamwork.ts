@@ -134,7 +134,7 @@ function handleSSE(name: string, event: any, w: any) {
   if (props.sessionID && props.sessionID !== w.sessionId) return
   const prevStatus = w.status || ""
 
-  if (type === "session.idle" && prevStatus !== "idle") {
+  if (type === "session.idle" && !w._idleLock) {
     handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
   } else if (type === "session.error" && prevStatus !== "error") {
     setStatus(name, "error")
@@ -182,15 +182,19 @@ function saveResult(name: string) {
 
 async function handleIdle(name: string) {
   const w = workers.get(name)
-  if (!w || w.status === "idle") return
+  if (!w || w._idleLock) return
+  w._idleLock = true
   setStatus(name, "idle")
-  // Fetch result before pushing event
+  // Fetch result
   try {
     const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
     const data = await res.json()
     const msgs = Array.isArray(data) ? data : [data]
     const text = msgs
-      .flatMap((m: any) => (m.parts || []).filter((p: any) => p.type === "text").map((p: any) => p.text))
+      .flatMap((m) => {
+        const parts = m.parts || (Array.isArray(m) ? m : [m])
+        return parts.filter((p) => p && p.type === "text").map((p) => p.text)
+      })
       .join("\n").trim()
     if (text) {
       w.lastResult = text
@@ -198,6 +202,7 @@ async function handleIdle(name: string) {
     }
   } catch {}
   pushEvent(`!ev ${name} done`)
+  w._idleLock = false
 }
 
 // ── Tools ───────────────────────────────────────────────
@@ -221,7 +226,7 @@ const toolDefs = {
       const agent = args.agent || "build"
       const sessionId = await createSession(port, name, agent)
 
-      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running", _permResolved: false }
+      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running", _permResolved: false, _idleLock: false }
       workers.set(name, w)
       setStatus(name, "running")
 
@@ -274,21 +279,36 @@ const toolDefs = {
   }),
 
   worker_result: tool({
-    description: "Đọc kết quả worker. Trả text nếu có, hoặc '(chưa xong)' nếu chưa.",
+    description: "Đọc kết quả worker. Fetch từ serve nếu chưa có cache.",
     args: {
       name: tool.schema.string().describe("Tên worker"),
     },
     async execute(args, ctx) {
       const w = workers.get(args.name)
       if (!w) return "(không tìm thấy worker)"
-      if (w.status === "error") return `(worker lỗi: ${w.status})`
-      if (w.status === "dead") return "(worker đã chết)"
       if (w.lastResult) return w.lastResult
       try {
         const txt = require("fs").readFileSync(resultPath(args.name), "utf-8")
         if (txt) { w.lastResult = txt; return txt }
       } catch {}
-      return `(${args.name}: ${w.status} — đợi !ev ${args.name} done)`
+      // Fetch directly from serve as fallback
+      try {
+        const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`)
+        const data = await res.json()
+        const msgs = Array.isArray(data) ? data : [data]
+        const text = msgs
+          .flatMap((m) => {
+            const parts = m.parts || (Array.isArray(m) ? m : [m])
+            return parts.filter((p) => p && p.type === "text").map((p) => p.text)
+          })
+          .join("\n").trim()
+        if (text) {
+          w.lastResult = text
+          try { require("fs").writeFileSync(resultPath(args.name), text) } catch {}
+          return text
+        }
+      } catch {}
+      return `(${args.name}: ${w.status} — chưa có kết quả)`
     },
   }),
 
@@ -383,16 +403,12 @@ export const AgentTeamwork = async ({ client, $ }) => {
   // Fallback poll: nếu SSE đứt, poll HTTP để không bỏ sót sự kiện
   const fallback = setInterval(async () => {
     for (const [name, w] of workers) {
-      if (w.status === "dead" || w.status === "error" || w.status === "idle") continue
+      if (w.status === "dead" || w.status === "error" || w._idleLock) continue
       try {
         const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
         const json = await res.json()
         const st = json[w.sessionId] && json[w.sessionId].type
-        if (st === "idle" && w.status !== "idle") {
-          handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
-        }
-        // If session not in status at all → might be idle/completed
-        if (!json[w.sessionId] && w.status === "running") {
+        if (st === "idle" || !json[w.sessionId]) {
           handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
       } catch {}
