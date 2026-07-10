@@ -1,7 +1,8 @@
 // Agent Teamwork Plugin — 1 file thay toàn bộ bash script
 // Quản lý opencode serve workers trực tiếp từ Manager TUI
-// @ts-nocheck
+import { z } from "zod"
 function tool(def) { return def }
+tool.schema = z
 
 // ── Config ──────────────────────────────────────────────
 
@@ -10,22 +11,9 @@ const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 const MAX_WORKERS = 5
 let _client: any = null  // SDK client, set at plugin init
 
-// ── Types ───────────────────────────────────────────────
-
-interface Worker {
-  name: string
-  port: number
-  pid: number
-  sessionId: string
-  model: string
-  status: string
-  lastResult?: string
-  pendingPermission?: string
-}
-
 // ── State ───────────────────────────────────────────────
 
-const workers = new Map<string, Worker>()
+const workers = new Map()
 const statusDir = `${process.env.PROJECT_DIR || process.cwd()}/.worker`
 
 function statusPath(name: string) { return `${statusDir}/_${name}.status` }
@@ -41,7 +29,7 @@ function setStatus(name: string, st: string) {
 }
 
 function writeStatusLog() {
-  const lines: string[] = []
+  const lines = []
   const now = new Date().toLocaleTimeString()
   for (const [n, w] of workers) {
     const extra = w.pendingPermission ? ` perm:${w.pendingPermission}` : ""
@@ -81,17 +69,6 @@ async function startServe(port: number): Promise<number> {
   proc.kill()
   throw new Error(`Serve not ready on port ${port}`)
 }
-  // Wait for serve ready
-  for (let i = 0; i < 30; i++) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/session/status`, { signal: AbortSignal.timeout(2000) })
-      return proc.pid
-    } catch {}
-    await Bun.sleep(1000)
-  }
-  proc.kill()
-  throw new Error(`Serve not ready on port ${port}`)
-}
 
 async function createSession(port: number, name: string, agent: string): Promise<string> {
   const res = await fetch(`http://127.0.0.1:${port}/session`, {
@@ -111,9 +88,8 @@ async function pushEvent(msg: string) {
     await _client.tui.appendPrompt({ body: { text: msg } })
     await _client.tui.submitPrompt()
   } catch {
-    _client?.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
+    _client.tui.appendPrompt({ body: { text: msg } }).catch(() => {})
   }
-}
 }
 
 async function monitorSSE(name: string, port: number) {
@@ -126,7 +102,7 @@ async function monitorSSE(name: string, port: number) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/event`)
       if (!res.ok) { await Bun.sleep(3000); continue }
-      const reader = res.body!.getReader()
+      const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ""
 
@@ -155,7 +131,7 @@ function handleSSE(name: string, event: any) {
   const type = event.type
   const props = event.properties || {}
   const w = workers.get(name)
-  const prevStatus = w?.status || ""
+  const prevStatus = w && w.status || ""
 
   if (type === "session.idle" && prevStatus !== "idle") {
     handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
@@ -174,7 +150,7 @@ function handleSSE(name: string, event: any) {
     setStatus(name, "running")
     if (w) w.pendingPermission = undefined
   } else if (type === "session.status") {
-    const st = props.status?.type
+    const st = props.status && props.status.type
     if (st === "idle" && prevStatus !== "idle") setStatus(name, "idle")
     else if (st === "busy" && prevStatus !== "running") setStatus(name, "running")
   }
@@ -239,7 +215,7 @@ const toolDefs = {
       const agent = args.agent || "build"
       const sessionId = await createSession(port, name, agent)
 
-      const w: Worker = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
+      const w = { name, port, pid, sessionId, model: args.model || DEFAULT_MODEL, status: "running" }
       workers.set(name, w)
       setStatus(name, "running")
 
@@ -379,7 +355,7 @@ const toolDefs = {
     async execute(args, ctx) {
       const names = [...workers.keys()]
       for (const name of names) {
-        const w = workers.get(name)!
+        const w = workers.get(name)
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
@@ -402,7 +378,7 @@ export const AgentTeamwork = async ({ client, $ }) => {
       try {
         const res = await fetch(`http://127.0.0.1:${w.port}/session/status`)
         const json = await res.json()
-        const st = json[w.sessionId]?.type
+        const st = json[w.sessionId] && json[w.sessionId].type
         if (st === "idle" && w.status !== "idle") {
           handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
         }
@@ -419,7 +395,7 @@ export const AgentTeamwork = async ({ client, $ }) => {
       clearInterval(fallback)
       const names = [...workers.keys()]
       for (const name of names) {
-        const w = workers.get(name)!
+        const w = workers.get(name)
         try { await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/abort`, { method: "POST" }) } catch {}
         try { process.kill(w.pid) } catch {}
       }
