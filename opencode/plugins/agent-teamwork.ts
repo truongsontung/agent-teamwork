@@ -284,6 +284,40 @@ const toolDefs = {
     },
   }),
 
+  worker_send_wait: tool({
+    description: "Gửi task cho worker và ĐỢI kết quả (blocking). Trả về text kết quả khi worker xong.",
+    args: {
+      name: tool.schema.string().describe("Tên worker"),
+      task: tool.schema.string().describe("Nhiệm vụ"),
+    },
+    async execute(args, ctx) {
+      const w = workers.get(args.name)
+      if (!w) throw new Error(`Worker '${args.name}' not found`)
+
+      const [provider, modelId] = w.model.includes("/") ? w.model.split("/") : ["opencode", w.model]
+
+      const res = await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parts: [{ type: "text", text: args.task }],
+          model: { providerID: provider, modelID: modelId },
+        }),
+      })
+      const data = await res.json()
+      const msgs = Array.isArray(data) ? data : [data]
+      const text = msgs
+        .flatMap((m) => (m.parts || []).filter((p) => p.type === "text").map((p) => p.text))
+        .join("\n").trim()
+      if (text) {
+        w.lastResult = text
+        try { require("fs").writeFileSync(resultPath(args.name), text) } catch {}
+      }
+      setStatus(args.name, "idle")
+      return text || "(worker không trả lời)"
+    },
+  }),
+
   worker_status: tool({
     description: "Đọc trạng thái worker từ cache. CHỈ dùng khi user hỏi, KHÔNG dùng để chờ.",
     args: {
