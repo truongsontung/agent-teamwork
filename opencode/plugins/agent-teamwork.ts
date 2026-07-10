@@ -6,6 +6,8 @@ const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 let _client = null
 const workers = new Map()
 
+function nextPort(){let p=PORT_BASE;while(workers.size>0&&[...workers.values()].some(w=>w.port===p))p++;return p}
+
 // ── Serve ───────────────────────────────────────────────
 
 async function startServe(port) {
@@ -92,7 +94,7 @@ function monitor(name,port,sid) {
 
 const tools={
 
-worker_create:tool({description:"Tạo worker. agent: build (mặc định)|plan.",args:{name:tool.schema.string(),model:tool.schema.string().optional(),agent:tool.schema.string().optional()},async execute(args,ctx){const name=args.name;if(workers.has(name))throw new Error("exists");if(workers.size>=MAX_WORKERS)throw new Error("max");const port=PORT_BASE+workers.size;const pid=await startServe(port);const agent=args.agent||"build";const sid=await createSession(port,name,agent);workers.set(name,{name,port,pid,sessionId:sid,model:args.model||DEFAULT_MODEL,_dead:false,_done:false});monitor(name,port,sid);return`+${name}`}}),
+worker_create:tool({description:"Tạo worker. agent: build (mặc định)|plan.",args:{name:tool.schema.string(),model:tool.schema.string().optional(),agent:tool.schema.string().optional()},async execute(args,ctx){const name=args.name;if(workers.has(name))throw new Error("exists");if(workers.size>=MAX_WORKERS)throw new Error("max");const port=nextPort();const pid=await startServe(port);const agent=args.agent||"build";const sid=await createSession(port,name,agent);workers.set(name,{name,port,pid,sessionId:sid,model:args.model||DEFAULT_MODEL,_dead:false,_done:false});monitor(name,port,sid);return`+${name}`}}),
 
 worker_send:tool({description:"Gửi task (non-blocking).",args:{name:tool.schema.string(),task:tool.schema.string()},async execute(args,ctx){const w=workers.get(args.name);if(!w)throw new Error("not found");w._done=false;const[p,m]=w.model.includes("/")?w.model.split("/"):["opencode",w.model];await fetch(`http://127.0.0.1:${w.port}/session/${w.sessionId}/prompt_async`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parts:[{type:"text",text:args.task}],model:{providerID:p,modelID:m}})});return"+"}}),
 
@@ -104,7 +106,7 @@ worker_kill:tool({description:"Hủy worker.",args:{name:tool.schema.string()},a
 
 worker_killall:tool({description:"Hủy tất cả.",args:{},async execute(args,ctx){const n=[...workers.keys()];for(const k of n){const w=workers.get(k);try{process.kill(w.pid)}catch{}}const c=workers.size;workers.clear();return String(c)}}),
 
-worker_status:tool({description:"Trạng thái.",args:{name:tool.schema.string().optional()},async execute(args,ctx){if(args.name){const w=workers.get(args.name);return w?w._done?"idle":"running":"dead"};if(workers.size===0)return"(none)";return[...workers.entries()].map(([n,w])=>`${n} ${w._done?"idle":"running"}`).join("\n")}}),
+worker_status:tool({description:"Trạng thái.",args:{name:tool.schema.string().optional()},async execute(args,ctx){const st=w=>w.pendingPermission?"permission":w._done?"idle":"running";if(args.name){const w=workers.get(args.name);return w?st(w):"dead"};if(workers.size===0)return"(none)";return[...workers.entries()].map(([n,w])=>`${n} ${st(w)}`).join("\n")}}),
 }
 
 // ── Plugin ──────────────────────────────────────────────
