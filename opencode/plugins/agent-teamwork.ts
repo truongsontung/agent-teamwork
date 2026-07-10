@@ -117,7 +117,7 @@ async function monitorSSE(name: string, port: number) {
           if (!line.startsWith("data: ")) continue
           let json: any
           try { json = JSON.parse(line.slice(6)) } catch { continue }
-          handleSSE(name, json)
+          handleSSE(name, json, w)
         }
       }
     } catch {
@@ -127,11 +127,12 @@ async function monitorSSE(name: string, port: number) {
   }
 }
 
-function handleSSE(name: string, event: any) {
+function handleSSE(name: string, event: any, w: any) {
   const type = event.type
   const props = event.properties || {}
-  const w = workers.get(name)
-  const prevStatus = w && w.status || ""
+  // Only process events for THIS worker's session
+  if (props.sessionID && props.sessionID !== w.sessionId) return
+  const prevStatus = w.status || ""
 
   if (type === "session.idle" && prevStatus !== "idle") {
     handleIdle(name).catch(() => pushEvent(`!ev ${name} done`))
@@ -141,14 +142,14 @@ function handleSSE(name: string, event: any) {
     pushEvent(`!ev ${name} error ${err}`)
   } else if (type === "permission.asked" && prevStatus !== "permission") {
     setStatus(name, "permission")
-    if (w) w.pendingPermission = props.id
+    w.pendingPermission = props.id
     try { require("fs").writeFileSync(permPath(name), JSON.stringify(event)) } catch {}
     const perm = props.permission || "?"
     const pats = (props.patterns || []).join(",")
     pushEvent(`!ev ${name} permission ${perm} [${pats}]`)
   } else if (type === "permission.replied") {
     setStatus(name, "running")
-    if (w) w.pendingPermission = undefined
+    w.pendingPermission = undefined
   } else if (type === "session.status") {
     const st = props.status && props.status.type
     if (st === "idle" && prevStatus !== "idle") setStatus(name, "idle")
