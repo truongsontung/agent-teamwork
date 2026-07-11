@@ -202,7 +202,12 @@ class WorkerGateway {
         const r = await fetch(`http://127.0.0.1:${this.port}/session/${sid}/message`, {
           signal: AbortSignal.timeout(5000),
         })
-        if (!r.ok) { await Bun.sleep(500); continue }
+        if (!r.ok) {
+          const errText = await r.text().catch(() => "")
+          if (attempt < 4) { await Bun.sleep(500); continue }
+          await this.push(`!ev ${this.name} error fetch result HTTP ${r.status}: ${errText}`)
+          return ""
+        }
         const data = await r.json()
         const msgs = Array.isArray(data) ? data : [data]
         const texts: string[] = []
@@ -217,7 +222,11 @@ class WorkerGateway {
         }
         const text = texts.join("\n").trim()
         if (text) { this.lastResult = text; return text }
-      } catch {}
+      } catch (e: any) {
+        if (attempt < 4) { await Bun.sleep(500); continue }
+        await this.push(`!ev ${this.name} error fetch result: ${e.message || e}`)
+        return ""
+      }
       if (attempt < 4) await Bun.sleep(500)
     }
     return ""
@@ -230,24 +239,35 @@ class WorkerGateway {
     this.done = false
     const [provider, modelId] = this.model.includes("/")
       ? this.model.split("/") : ["opencode", this.model]
-    const r = await fetch(
-      `http://127.0.0.1:${this.port}/session/${this.sessionId}/prompt_async`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          parts: [{ type: "text", text: task }],
-          model: { providerID: provider, modelID: modelId },
-        }),
+    try {
+      const r = await fetch(
+        `http://127.0.0.1:${this.port}/session/${this.sessionId}/prompt_async`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parts: [{ type: "text", text: task }],
+            model: { providerID: provider, modelID: modelId },
+          }),
+        }
+      )
+      if (!r.ok) {
+        const errText = await r.text().catch(() => "")
+        this.awaitingTask = false
+        this.hasTask = false
+        this.taskSent = false
+        this.done = true
+        await this.push(`!ev ${this.name} error send failed HTTP ${r.status}: ${errText}`)
+        return
       }
-    )
-    if (!r.ok) {
+      void this.push(`!ev ${this.name} started`)
+    } catch (e: any) {
       this.awaitingTask = false
       this.hasTask = false
       this.taskSent = false
-      throw new Error(`send failed HTTP ${r.status}`)
+      this.done = true
+      await this.push(`!ev ${this.name} error ${e.message || e}`)
     }
-    void this.push(`!ev ${this.name} started`)
   }
 
   async allowPermission(response?: string) {
