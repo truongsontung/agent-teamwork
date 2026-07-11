@@ -35,6 +35,7 @@ opencode TUI
 │   └── todowrite hiển thị tiến độ worker
 │
 ├── Plugin (agent-teamwork.ts)
+│   ├── Đọc config từ worker.json (model, max_workers)
 │   ├── Spawn opencode serve processes (workers)
 │   ├── SSE monitor per worker (real-time events)
 │   └── appendPrompt("!ev X done") → Manager nhận qua TUI prompt
@@ -51,6 +52,7 @@ opencode TUI
 Manager                  Plugin                    Workers
   │                        │                          │
   ├── worker_create w1 ───►├── spawn opencode serve ──►│
+  │                        │   (model từ worker.json)  │
   │◄── "+w1 (port 4091)" ─┤                          │
   │                        │                          │
   ├── worker_send w1 ────►├── POST /prompt_async ────►│
@@ -98,12 +100,17 @@ Manager nhận events qua TUI prompt (plugin dùng `appendPrompt` + `submitPromp
 
 ### Worker config (`worker.json`)
 
+Plugin đọc trực tiếp file này khi khởi động. Thay đổi model/max_workers tại đây, không cần sửa plugin.
+
 ```json
 {
   "model": "zen-proxy/deepseek-v4-flash-free",
   "max_workers": 5
 }
 ```
+
+- `model`: Model mặc định cho tất cả workers. Hỗ trợ `provider/model` hoặc `model`.
+- `max_workers`: Số worker tối đa đồng thời (default: 5).
 
 ### Provider config (`opencode.json`)
 
@@ -136,6 +143,10 @@ Khi worker cần quyền (edit, bash, write...), plugin tự động:
 1. Push `!ev <tên> permission <type> options=[...]` vào prompt
 2. Manager gọi `worker_allow <tên>` với response (once/always/never/index)
 3. Plugin forward đến worker, worker tiếp tục xử lý
+
+## Tái sử dụng worker
+
+Worker đã tạo **không cần kill** sau khi xong. Gửi task mới bằng `worker_send` để tái sử dụng. Chỉ kill khi cần thiết (`worker_kill` / `worker_killall`).
 
 ## Cập nhật
 
