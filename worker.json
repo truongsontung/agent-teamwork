@@ -1,4 +1,4 @@
 {
-  "model": "nvidia/nemotron-3-ultra-550b-a55b",
+  "model": "zen-proxy/deepseek-v4-flash-free",
   "max_workers": 5
 }

@@ -3,8 +3,20 @@ function tool(def: any) { return def }
 tool.schema = z
 
 let _client: any = null
-const MAX_WORKERS = 5
-const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+
+function loadWorkerConfig(): { model: string; max_workers: number } {
+  try {
+    const cfgPath = `${process.env.HOME}/.config/opencode/worker.json`
+    const file = require("fs").readFileSync(cfgPath, "utf-8")
+    const cfg = JSON.parse(file)
+    return { model: cfg.model || "zen-proxy/deepseek-v4-flash-free", max_workers: cfg.max_workers || 5 }
+  } catch {
+    return { model: "zen-proxy/deepseek-v4-flash-free", max_workers: 5 }
+  }
+}
+const workerConfig = loadWorkerConfig()
+const DEFAULT_MODEL = workerConfig.model
+const MAX_WORKERS = workerConfig.max_workers
 const workers = new Map<string, WorkerGateway>()
 const starting = new Map<string, number>()
 let portCursor = 4091
