@@ -4,14 +4,11 @@ tool.schema = z
 
 let _client: any = null
 const MAX_WORKERS = 5
-const DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
+const DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 const workers = new Map<string, WorkerGateway>()
-// Reserve ports while a create call is awaiting startup. Without this, two
-// concurrent creates both see the same free port and start conflicting serves.
 const starting = new Map<string, number>()
 let portCursor = 4091
 
-// appendPrompt + submitPrompt must stay atomic relative to other worker events.
 let pushQueue: Promise<void> = Promise.resolve()
 
 class PortInUseError extends Error {}
@@ -29,10 +26,6 @@ async function pushManagerEvent(msg: string) {
   await pushQueue
 }
 
-// ═══════════════════════════════════════════
-// WorkerGateway — mỗi worker 1 instance riêng
-// ═══════════════════════════════════════════
-
 class WorkerGateway {
   name: string
   port: number
@@ -43,6 +36,7 @@ class WorkerGateway {
   dead = false
   awaitingTask = false
   hasTask = false
+  taskSent = false
   lastResult = ""
   pendingPermission?: string
   private monitorAbort = new AbortController()
@@ -53,36 +47,37 @@ class WorkerGateway {
     this.sessionId = sid; this.model = model
   }
 
-  // ── Gửi event về Manager ─────────────
-
   private async push(msg: string) {
     await pushManagerEvent(msg)
   }
 
-  // ── SSE Monitor ──────────────────────
-
   startMonitor() {
-    const gw = this;
-    (async () => {
+    this.monitorTask = (async () => {
       let running = true
-      gw.proc.exited
-        .then((code: number) => gw.handleExit(code))
-        .catch(() => gw.handleExit("unknown"))
+      let backoff = 1000
+
+      this.proc.exited
+        .then((code: number) => this.handleExit(code))
+        .catch(() => this.handleExit("unknown"))
         .finally(() => { running = false })
 
-      while (running) {
-        if (gw.dead) return
+      while (running && !this.dead) {
         try {
-          const r = await fetch(`http://127.0.0.1:${gw.port}/event`, {
-            signal: gw.monitorAbort.signal,
+          const r = await fetch(`http://127.0.0.1:${this.port}/event`, {
+            signal: this.monitorAbort.signal,
           })
-          if (!r.ok || !r.body) { await Bun.sleep(1000); continue }
+          if (!r.ok || !r.body) {
+            await Bun.sleep(backoff)
+            backoff = Math.min(backoff * 2, 10000)
+            continue
+          }
+          backoff = 1000
 
           const reader = r.body.getReader()
           const decoder = new TextDecoder()
           let buf = ""
 
-          while (running) {
+          while (running && !this.dead) {
             let chunk: any
             try { chunk = await reader.read() } catch { break }
             if (chunk.done) break
@@ -96,47 +91,58 @@ class WorkerGateway {
               let raw: any
               try { raw = JSON.parse(data) } catch { continue }
               const p = raw.properties || {}
-              if (p.sessionID && p.sessionID !== gw.sessionId) continue
+              if (p.sessionID && p.sessionID !== this.sessionId) continue
 
-              // Fire-and-forget, nhưng bắt lỗi để log
-              gw.onEvent(raw, p).catch((e: any) => {
-                console.error(`[GW:${gw.name}] onEvent error: ${e.message || e}`)
-              })
+              try {
+                await this.onEvent(raw, p)
+              } catch (e: any) {
+                console.error(`[GW:${this.name}] onEvent error: ${e.message || e}`)
+              }
             }
           }
         } catch {
-          if (gw.monitorAbort.signal.aborted) return
-          if (running) await Bun.sleep(1000)
+          if (this.monitorAbort.signal.aborted) return
+          if (running) await Bun.sleep(backoff)
+          backoff = Math.min(backoff * 2, 10000)
         }
       }
-
     })().catch(() => {})
   }
+  private monitorTask: Promise<void> | null = null
 
   private async handleExit(code: number | string) {
     if (this.exitHandled) return
     this.exitHandled = true
-    if (this.dead) return // deliberate worker_kill / Manager cleanup
+    if (this.dead) return
 
     this.dead = true
     this.monitorAbort.abort()
     if (workers.get(this.name) === this) workers.delete(this.name)
     await this.push(`!ev ${this.name} died exit=${code}`)
-    void Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
+    await Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
   }
 
   private async onEvent(raw: any, p: any) {
     const t = raw.type
 
-    // An SSE subscription may still contain the session's initial `idle`
-    // notification when worker_send is called.  A task becomes eligible for
-    // completion only after the server has announced a non-idle state.
+    // Old events (pre-1.17)
     if (t === "session.status" && p.status?.type && p.status.type !== "idle" && this.awaitingTask) {
       this.hasTask = true
+      this.awaitingTask = false
     }
 
-    // ── Done ──
-    if (this.hasTask && ((t === "session.status" && p.status?.type === "idle") || t === "session.idle")) {
+    // New events (1.17+) - session.next.*
+    // Task starts
+    if ((t === "session.next.step.started" || t === "session.next.running") && this.awaitingTask) {
+      this.hasTask = true
+      this.awaitingTask = false
+    }
+
+    // Task done: old idle OR new complete/idle/prompted
+    const isOldIdle = this.hasTask && ((t === "session.status" && p.status?.type === "idle") || t === "session.idle")
+    const isNewDone = (this.hasTask || this.taskSent) && (t === "session.next.complete" || t === "session.next.idle" || t === "session.next.prompted")
+
+    if (isOldIdle || isNewDone) {
       if (this.done) return
       this.done = true
       await this.fetchAndCacheResult()
@@ -144,28 +150,46 @@ class WorkerGateway {
       return
     }
 
-    // ── Permission ──
-    if (t === "permission.asked") {
+    // Error events
+    if ((this.hasTask || this.taskSent) && (t === "session.next.step.failed" || t === "session.next.tool.failed" || t === "session.next.error")) {
+      if (this.done) return
+      this.done = true
+      await this.fetchAndCacheResult()
+      await this.push(`!ev ${this.name} error ${p.error?.message || p.message || "step failed"}`)
+      return
+    }
+
+    if (t === "permission.asked" || t === "permission.ask") {
       if (!this.pendingPermission) {
         this.pendingPermission = p.id
-        await this.push(`!ev ${this.name} permission ${p.permission || "?"}`)
+        const opts = p.options ? ` options=${JSON.stringify(p.options)}` : ""
+        const msg = p.message ? ` msg="${p.message}"` : ""
+        await this.push(`!ev ${this.name} permission ${p.permission || "?"}${opts}${msg}`)
       }
       return
     }
-    if (t === "permission.replied") {
+    if (t === "permission.replied" || t === "permission.resolved" || t === "permission.granted") {
       this.pendingPermission = undefined
+      // Re-arm task tracking so completion detection works after permission
+      this.awaitingTask = true
+      this.hasTask = false
       this.done = false
       return
     }
-  }
 
-  // ── Kết quả ──────────────────────────
+    // Debug: log unknown session.next events
+    if (t.startsWith("session.next.")) {
+      console.log(`[GW:${this.name}] event: ${t}`)
+    }
+  }
 
   async fetchAndCacheResult() {
     const sid = this.sessionId
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const r = await fetch(`http://127.0.0.1:${this.port}/session/${sid}/message`)
+        const r = await fetch(`http://127.0.0.1:${this.port}/session/${sid}/message`, {
+          signal: AbortSignal.timeout(5000),
+        })
         if (!r.ok) { await Bun.sleep(500); continue }
         const data = await r.json()
         const msgs = Array.isArray(data) ? data : [data]
@@ -187,13 +211,10 @@ class WorkerGateway {
     return ""
   }
 
-  // ── Send task ────────────────────────
-
   async sendTask(task: string) {
-    // Do not count an initial idle event as completion.  `onEvent` promotes
-    // this to hasTask only after OpenCode reports a non-idle status.
     this.awaitingTask = true
     this.hasTask = false
+    this.taskSent = true
     this.done = false
     const [provider, modelId] = this.model.includes("/")
       ? this.model.split("/") : ["opencode", this.model]
@@ -211,55 +232,55 @@ class WorkerGateway {
     if (!r.ok) {
       this.awaitingTask = false
       this.hasTask = false
+      this.taskSent = false
       throw new Error(`send failed HTTP ${r.status}`)
     }
     void this.push(`!ev ${this.name} started`)
   }
 
-  // ── Permission ───────────────────────
-
-  async allowPermission() {
+  async allowPermission(response?: string) {
     const pid = this.pendingPermission
     if (!pid) return "(đã auto-resolve)"
     try {
+      const body: any = { response: response || "once" }
+      // If response looks like an option index/value, send as option
+      if (response && response !== "once" && response !== "always" && response !== "never") {
+        body.option = response
+      }
       const r = await fetch(
         `http://127.0.0.1:${this.port}/session/${this.sessionId}/permissions/${pid}`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ response: "once" }) }
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
       )
-      if (!r.ok) { this.pendingPermission = undefined; this.done = false; return `(HTTP ${r.status})` }
-    } catch { return "(lỗi)" }
-    this.pendingPermission = undefined
-    this.done = false
-    return "ok"
+      if (!r.ok) throw new Error(`permission HTTP ${r.status}`)
+      this.pendingPermission = undefined
+      this.done = false
+      return "permission granted"
+    } catch (e: any) {
+      this.pendingPermission = undefined
+      throw e
+    }
   }
 
-  // ── Kill ─────────────────────────────
-
   async kill() {
+    if (this.dead) return
     this.dead = true
     this.monitorAbort.abort()
-    try { this.proc.kill() } catch {}
-    await Promise.race([
-      this.proc.exited.catch(() => {}),
-      Bun.sleep(5_000),
-    ])
-    try { this.proc.kill("SIGKILL") } catch {}
+    if (this.proc) {
+      this.proc.kill()
+      try { await this.proc.exited } catch {}
+    }
+    if (workers.get(this.name) === this) workers.delete(this.name)
     await Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
   }
 }
 
-// ═══════════════════════════════════════════
-// Serve — spawn + readiness check
-// ═══════════════════════════════════════════
-
-async function portInUse(port: number) {
+async function portInUse(port: number): Promise<boolean> {
   try {
-    // Any HTTP response means another process owns this loopback port. Do not
-    // delete its XDG data directory or connect the new gateway to it.
-    await fetch(`http://127.0.0.1:${port}/session/status`, {
-      signal: AbortSignal.timeout(500),
-    })
-    return true
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 500)
+    const r = await fetch(`http://127.0.0.1:${port}/session/status`, { signal: controller.signal })
+    clearTimeout(timeout)
+    return r.ok
   } catch {
     return false
   }
@@ -269,26 +290,22 @@ async function startServe(port: number, name: string) {
   if (await portInUse(port)) throw new PortInUseError(`port ${port} is already in use`)
 
   const dbDir = `/tmp/oc-${port}`
-  try { (await Bun.spawn(["rm", "-rf", dbDir]).exited) } catch {}
-  try { (await Bun.spawn(["mkdir", "-p", `${dbDir}/opencode`]).exited) } catch {}
+  try { await Bun.spawn(["rm", "-rf", dbDir]).exited } catch {}
+  try { await Bun.spawn(["mkdir", "-p", `${dbDir}/opencode`]).exited } catch {}
 
-  // Copy auth.json từ data dir gốc để serve có API key
   const srcAuth = `${process.env.XDG_DATA_HOME || `${process.env.HOME}/.local/share`}/opencode/auth.json`
-  try { await Bun.spawn(["cp", srcAuth, `${dbDir}/opencode/auth.json`]).exited } catch {}
+  try { await Bun.spawn(["cp", srcAuth, `${dbDir}/opencode/auth.json`]).exited } catch (e) {
+    console.warn(`[Gateway:${name}] auth.json copy failed: ${e}`)
+  }
 
   const proc = Bun.spawn(
-    // Workers must only expose OpenCode's built-in tools. The parent project
-    // can contain external plugins (for example ~/.opencode's `list` plugin)
-    // that alter glob/read behavior and are unrelated to the assigned task.
     ["opencode", "serve", "--pure", "--port", String(port), "--hostname", "127.0.0.1"],
     {
-      // Drain stderr continuously. This both avoids a full pipe blocking the
-      // worker and preserves a short diagnostic when startup fails.
       stdout: "ignore", stderr: "pipe",
       env: {
         ...process.env,
-        XDG_DATA_HOME: dbDir,                        // DB riêng
-        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`, // config chung (provider/auth)
+        XDG_DATA_HOME: dbDir,
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`,
       },
     }
   )
@@ -298,12 +315,14 @@ async function startServe(port: number, name: string) {
   void (async () => {
     const reader = stderr.getReader()
     const decoder = new TextDecoder()
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) return
-      stderrTail = (stderrTail + decoder.decode(chunk.value, { stream: true })).slice(-4_000)
-    }
-  })().catch(() => {})
+    try {
+      while (true) {
+        const chunk = await reader.read()
+        if (chunk.done) return
+        stderrTail = (stderrTail + decoder.decode(chunk.value, { stream: true })).slice(-4_000)
+      }
+    } catch {}
+  })()
   const startupError = () => stderrTail.trim().replace(/\s+/g, " ").slice(-1_000)
 
   for (let i = 0; i < 30; i++) {
@@ -313,9 +332,10 @@ async function startServe(port: number, name: string) {
       throw new Error(`serve ${name} exited code=${proc.exitCode}${detail ? `: ${detail}` : ""}`)
     }
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/session/status`, {
-        signal: AbortSignal.timeout(2000),
-      })
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 3000)
+      const r = await fetch(`http://127.0.0.1:${port}/session/status`, { signal: controller.signal })
+      clearTimeout(timeout)
       if (r.ok) return proc
     } catch {}
     await Bun.sleep(500)
@@ -325,7 +345,7 @@ async function startServe(port: number, name: string) {
   throw new Error(`serve ${name} not ready on port ${port}${detail ? `: ${detail}` : ""}`)
 }
 
-async function createSession(port: number, name: string, agent: string) {
+async function createSession(port: number, name: string, agent: string): Promise<string> {
   const r = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -340,7 +360,7 @@ async function createSession(port: number, name: string, agent: string) {
 
 function nextPort(): number {
   const used = new Set([
-    ...[...workers.values()].map(w => w.port),
+    [...workers.values()].map(w => w.port),
     ...starting.values(),
   ])
   let p = portCursor
@@ -348,10 +368,6 @@ function nextPort(): number {
   portCursor = p + 1
   return p
 }
-
-// ═══════════════════════════════════════════
-// Tools
-// ═══════════════════════════════════════════
 
 const tools = {
   worker_create: tool({
@@ -369,9 +385,8 @@ const tools = {
       let port = nextPort()
       starting.set(name, port)
       let proc: any = null
+      let startupFailed = false
       try {
-        // A previous Manager can have left a serve behind. Skip its port rather
-        // than connecting the new gateway to that unrelated process.
         for (;;) {
           try {
             proc = await startServe(port, name)
@@ -390,13 +405,19 @@ const tools = {
         gw.startMonitor()
         return `+${name} (port ${port})`
       } catch (e) {
-        try { proc?.kill() } catch {}
+        startupFailed = true
+        if (proc) {
+          try { proc.kill() } catch {}
+          try { await proc.exited } catch {}
+        }
         await Bun.spawn(["rm", "-rf", `/tmp/oc-${port}`]).exited
         const message = e instanceof Error ? e.message : String(e)
         await pushManagerEvent(`!ev ${name} error create failed: ${message}`)
         throw e
       } finally {
-        starting.delete(name)
+        if (!startupFailed || !workers.has(name)) {
+          starting.delete(name)
+        }
       }
     },
   }),
@@ -419,19 +440,19 @@ const tools = {
       const gw = workers.get(args.name)
       if (!gw) return "(không tìm thấy)"
       if (gw.lastResult) return gw.lastResult
-      if (!gw.done) return `(chưa xong — đợi !ev ${args.name} done)`
+      if (!gw.done) throw new Error(`CHƯA XONG — BẮT BUỘC ĐỢI !ev ${args.name} done. Worker ${args.name} vẫn đang chạy. HÃY DỪNG GỌI worker_result VÀ CHỜ EVENT.`)
       await gw.fetchAndCacheResult()
       return gw.lastResult || "(done nhưng kết quả rỗng — thử worker_result lần nữa)"
     },
   }),
 
   worker_allow: tool({
-    description: "Duyệt permission.",
-    args: { name: tool.schema.string() },
+    description: "Duyệt permission. response: once|always|never|<index>|<value>",
+    args: { name: tool.schema.string(), response: tool.schema.string().optional() },
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
-      return await gw.allowPermission()
+      return await gw.allowPermission(args.response)
     },
   }),
 
@@ -454,32 +475,11 @@ const tools = {
       const active = [...workers.values()]
       const n = workers.size
       workers.clear()
-      await Promise.all(active.map(gw => gw.kill()))
+      await Promise.allSettled(active.map(gw => gw.kill()))
       return String(n)
     },
   }),
-
-  worker_status: tool({
-    description: "Trạng thái (chỉ debug).",
-    args: { name: tool.schema.string().optional() },
-    async execute(args: any) {
-      const st = (gw: WorkerGateway) =>
-        gw.dead ? "dead" : gw.pendingPermission ? "permission" : gw.done ? "idle" : "running"
-      if (args.name) {
-        const gw = workers.get(args.name)
-        return gw ? st(gw) : "dead"
-      }
-      if (workers.size === 0) return "(none)"
-      return [...workers.entries()]
-        .map(([n, gw]) => `${n} ${st(gw)}`)
-        .join("\n")
-    },
-  }),
 }
-
-// ═══════════════════════════════════════════
-// Plugin export
-// ═══════════════════════════════════════════
 
 export const AgentTeamwork = async ({ client }: any) => {
   _client = client
@@ -487,7 +487,12 @@ export const AgentTeamwork = async ({ client }: any) => {
   const cleanup = async () => {
     const active = [...workers.values()]
     workers.clear()
-    await Promise.all(active.map(gw => gw.kill()))
+    await Promise.allSettled(
+      active.map(gw => Promise.race([
+        gw.kill(),
+        new Promise(r => setTimeout(r, 5000))
+      ]))
+    )
   }
 
   process.once("SIGINT", () => {

@@ -1,0 +1,24 @@
+{
+  "name": "agent-teamwork",
+  "version": "1.0.0",
+  "description": "Cài 1 lần — dùng mọi project. Bấm Tab để có Manager điều phối worker song song ngay trong opencode TUI.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/truongsontung/agent-teamwork.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/truongsontung/agent-teamwork/issues"
+  },
+  "homepage": "https://github.com/truongsontung/agent-teamwork#readme",
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

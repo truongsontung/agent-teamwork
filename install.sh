@@ -30,7 +30,6 @@ cp "$SCRIPT_DIR/worker.json" "$OPENDIR/"
 echo "  ✓ config → $OPENDIR/worker.json"
 
 # ── Manager agent ────────────────────────────────────────
-
 MGR="$SCRIPT_DIR/manager.json"
 mgr_desc=$(jq -r '.description' "$MGR")
 mgr_mode=$(jq -r '.mode' "$MGR")
