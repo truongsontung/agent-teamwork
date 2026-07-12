@@ -235,8 +235,9 @@ class WorkerGateway {
     this.hasTask = false
     this.taskSent = true
     this.done = false
-    const [provider, modelId] = this.model.includes("/")
+    const [provider, ...rest] = this.model.includes("/")
       ? this.model.split("/") : ["opencode", this.model]
+    const modelId = rest.join("/")
     try {
       const r = await fetch(
         `http://127.0.0.1:${this.port}/session/${this.sessionId}/prompt_async`,
@@ -329,7 +330,7 @@ async function startServe(port: number, name: string) {
   }
 
   const proc = Bun.spawn(
-    ["opencode", "serve", "--pure", "--port", String(port), "--hostname", "127.0.0.1"],
+    ["opencode", "serve", "--port", String(port), "--hostname", "127.0.0.1", "--pure"],
     {
       stdout: "ignore", stderr: "pipe",
       env: {
