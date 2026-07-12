@@ -74,6 +74,8 @@ Manager                  Plugin                    Workers
 | `worker_send <tên> "task"` | Gửi task (fire & forget, không block) |
 | `worker_result <tên>` | Đọc kết quả — **chỉ gọi sau khi nhận `!ev <tên> done`** |
 | `worker_allow <tên>` | Duyệt permission (once/always/never/index) |
+| `worker_choose <tên> <label\|index>` | Trả lời question của worker (tick chọn) — gọi sau `!ev <tên> ask` |
+| `worker_reject <tên>` | Từ chối question của worker |
 | `worker_kill <tên>` | Hủy worker |
 | `worker_killall` | Hủy tất cả workers |
 
@@ -85,8 +87,9 @@ Manager nhận events qua TUI prompt (plugin dùng `appendPrompt` + `submitPromp
 |-------|----------|
 | `!ev <tên> started` | Worker bắt đầu xử lý |
 | `!ev <tên> permission <type>` | Worker cần duyệt quyền |
+| `!ev <tên> ask <header> Q1: <câu hỏi> [multi] (opt1\|opt2\|opt3)` | Worker đang hỏi, chờ Manager tick chọn qua `worker_choose` |
 | `!ev <tên> done` | Worker hoàn thành task |
-| `!ev <tên> error <msg>` | Worker gặp lỗi |
+| `!ev <tên> error [cls] <msg>` | Worker gặp lỗi. `cls` = quota/ratelimit/auth/context/network/model (phân loại lỗi model/provider) |
 | `!ev <tên> died exit=<code>` | Worker process bị killed |
 
 ## Cấu hình

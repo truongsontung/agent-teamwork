@@ -2,6 +2,28 @@ import { z } from "zod"
 function tool(def: any) { return def }
 tool.schema = z
 
+// Phân loại lỗi model/provider thành nhãn ngắn để Manager dễ phản ứng
+function classifyModelError(s: string): string {
+  const t = (s || "").toLowerCase()
+  if (/(rate.?limit|too many requests|429|slow down|throttl)/.test(t)) return "ratelimit"
+  // context phải kiểm tra TRƯỚC quota, vì "exceeded" cũng nằm trong cụm context overflow
+  if (/(context|token).*(overflow|exceed|too long)|maximum context|context length/.test(t)) return "context"
+  if (/(quota|limit reached|out of (credits|requests)|usage limit|credit)/.test(t)) return "quota"
+  if (/(auth|api[ _-]?key|unauthor|invalid key|401|403|permission denied)/.test(t)) return "auth"
+  if (/(content.?filter|moderat|blocked by)/.test(t)) return "contentfilter"
+  if (/(network|econnrefused|enotfound|timeout|fetch failed|connection)/.test(t)) return "network"
+  return "model"
+}
+
+function extractErrorText(raw: any, p: any): { text: string; tag: string } {
+  const errObj: any = (p && p.error) || (raw && raw.error) || null
+  if (!errObj) return { text: "session error (không có chi tiết)", tag: "" }
+  if (typeof errObj === "string") return { text: errObj, tag: "" }
+  const text = errObj.message || errObj.error || errObj.reason || JSON.stringify(errObj)
+  const tag = errObj._tag || errObj.name || errObj.status || ""
+  return { text: String(text), tag: String(tag) }
+}
+
 let _client: any = null
 
 function loadWorkerConfig(): { model: string; max_workers: number } {
@@ -49,6 +71,9 @@ class WorkerGateway {
   taskSent = false
   lastResult = ""
   pendingPermission?: string
+  pendingQuestion?: string
+  pendingQuestionLabels: string[] = []
+  pendingQuestionMultiple = false
   private monitorAbort = new AbortController()
   private exitHandled = false
 
@@ -150,7 +175,12 @@ class WorkerGateway {
 
     // Task done: old idle OR new complete/idle/prompted
     const isOldIdle = this.hasTask && ((t === "session.status" && p.status?.type === "idle") || t === "session.idle")
-    const isNewDone = (this.hasTask || this.taskSent) && (t === "session.next.complete" || t === "session.next.idle" || t === "session.next.prompted")
+    // Khi worker đang chờ Manager tick-chọn (pendingQuestion), session.next.prompted
+    // là trạng thái "đang hỏi", KHÔNG được tính là done.
+    const isNewDone = (this.hasTask || this.taskSent) && (
+      t === "session.next.complete" || t === "session.next.idle" ||
+      (t === "session.next.prompted" && !this.pendingQuestion)
+    )
 
     if (isOldIdle || isNewDone) {
       if (this.done) return
@@ -163,9 +193,23 @@ class WorkerGateway {
     // Error events
     if ((this.hasTask || this.taskSent) && (t === "session.next.step.failed" || t === "session.next.tool.failed" || t === "session.next.error")) {
       if (this.done) return
+      const em = p.error?.message || p.message || "step failed"
+      const cls = classifyModelError(em)
       this.done = true
       await this.fetchAndCacheResult()
-      await this.push(`!ev ${this.name} error ${p.error?.message || p.message || "step failed"}`)
+      await this.push(`!ev ${this.name} error [${cls}] ${em}`)
+      return
+    }
+
+    // Session-level error: lỗi model/provider (quota, rate-limit, auth, context overflow...)
+    // opencode phát qua event "session.error" (KHÔNG nằm trong session.next.*).
+    // Nếu không bắt ở đây, Manager sẽ KHÔNG nhận được bất kỳ !ev error nào khi hết quota/limit.
+    if (t === "session.error") {
+      if (this.done) return
+      const { text, tag } = extractErrorText(raw, p)
+      const cls = classifyModelError(text + " " + tag)
+      this.done = true
+      await this.push(`!ev ${this.name} error [${cls}] ${text}`)
       return
     }
 
@@ -184,6 +228,45 @@ class WorkerGateway {
       this.awaitingTask = true
       this.hasTask = false
       this.done = false
+      return
+    }
+
+    // Tick-chọn: worker hỏi Manager qua tool question
+    if (t === "question.asked" || t === "question.v2.asked") {
+      if (!this.pendingQuestion) {
+        this.pendingQuestion = p.id || raw.id
+        const qs: any[] = p.questions || []
+        const labels: string[] = []
+        const segs = qs.map((q: any, i: number) => {
+          const opts: any[] = q.options || []
+          opts.forEach((o: any) => { if (o && o.label) labels.push(o.label) })
+          const multi = q.multiple ? " [multi]" : ""
+          const optStr = opts.map((o: any) => o?.label || "").filter(Boolean).join("|")
+          return `Q${i + 1}: ${q.question || ""}${multi} (${optStr})`
+        })
+        this.pendingQuestionLabels = labels
+        this.pendingQuestionMultiple = qs.some((q: any) => q.multiple)
+        const hdr = p.header ? ` header="${p.header}"` : ""
+        await this.push(`!ev ${this.name} ask${hdr} ${segs.join(" || ")}`)
+      }
+      return
+    }
+    if (t === "question.replied" || t === "question.v2.replied" || t === "question.resolved") {
+      if (this.pendingQuestion) {
+        this.pendingQuestion = undefined
+        this.pendingQuestionLabels = []
+        this.pendingQuestionMultiple = false
+        // Re-arm task tracking để bắt event done sau khi Manager trả lời
+        this.awaitingTask = true
+        this.hasTask = false
+        this.done = false
+      }
+      return
+    }
+    if (t === "question.rejected" || t === "question.v2.rejected") {
+      this.pendingQuestion = undefined
+      this.pendingQuestionLabels = []
+      this.pendingQuestionMultiple = false
       return
     }
 
@@ -290,6 +373,65 @@ class WorkerGateway {
       this.pendingPermission = undefined
       throw e
     }
+  }
+
+  private async replyQuestion(qid: string, body?: any, reject = false): Promise<boolean> {
+    const suffix = reject ? "/reject" : "/reply"
+    const paths = [
+      `http://127.0.0.1:${this.port}/question/${qid}${suffix}`,
+      `http://127.0.0.1:${this.port}/api/session/${this.sessionId}/question/${qid}${suffix}`,
+    ]
+    let lastErr = ""
+    for (const url of paths) {
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+        })
+        if (r.ok) return true
+        lastErr = `HTTP ${r.status}`
+      } catch (e: any) {
+        lastErr = e.message || String(e)
+      }
+    }
+    throw new Error(`question ${reject ? "reject" : "reply"} failed: ${lastErr}`)
+  }
+
+  async chooseQuestion(response?: string) {
+    const qid = this.pendingQuestion
+    if (!qid) return "(không có question đang chờ)"
+    const raw = (response || "").trim()
+    let labels: string[]
+    if (raw === "") {
+      labels = []
+    } else if (/^[\d,\s]+$/.test(raw)) {
+      // response là index/indexes (hỗ trợ "1,3" cho multiple)
+      labels = raw.split(/[,\s]+/).filter(Boolean)
+        .map((n) => this.pendingQuestionLabels[parseInt(n, 10) - 1])
+        .filter((x): x is string => !!x)
+    } else {
+      // response là label(s), phân tách bằng | hoặc ,
+      labels = raw.split(/[|]/).map((s) => s.trim()).filter(Boolean)
+    }
+    const body = { answers: [labels] }
+    await this.replyQuestion(qid, body, false)
+    this.pendingQuestion = undefined
+    this.pendingQuestionLabels = []
+    this.pendingQuestionMultiple = false
+    this.done = false
+    return "question answered"
+  }
+
+  async rejectQuestion() {
+    const qid = this.pendingQuestion
+    if (!qid) return "(không có question đang chờ)"
+    await this.replyQuestion(qid, undefined, true)
+    this.pendingQuestion = undefined
+    this.pendingQuestionLabels = []
+    this.pendingQuestionMultiple = false
+    this.done = false
+    return "question rejected"
   }
 
   async kill() {
@@ -515,6 +657,26 @@ const tools = {
       workers.clear()
       await Promise.allSettled(active.map(gw => gw.kill()))
       return String(n)
+    },
+  }),
+
+  worker_choose: tool({
+    description: "Trả lời question của worker (tick chọn). response: <label> hoặc <index> hoặc '1,3' cho multiple. Được gọi sau !ev X ask.",
+    args: { name: tool.schema.string(), response: tool.schema.string().optional() },
+    async execute(args: any) {
+      const gw = workers.get(args.name)
+      if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
+      return await gw.chooseQuestion(args.response)
+    },
+  }),
+
+  worker_reject: tool({
+    description: "Từ chối question của worker (hủy yêu cầu chọn). Được gọi sau !ev X ask.",
+    args: { name: tool.schema.string() },
+    async execute(args: any) {
+      const gw = workers.get(args.name)
+      if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
+      return await gw.rejectQuestion()
     },
   }),
 
