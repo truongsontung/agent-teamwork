@@ -38,6 +38,7 @@ opencode TUI
 │   ├── Đọc config từ worker.json (model, max_workers)
 │   ├── Spawn opencode serve processes (workers)
 │   ├── SSE monitor per worker (real-time events)
+│   ├── Log monitor fallback (poll log file 1s, detect rate limit/quota)
 │   └── appendPrompt("!ev X done") → Manager nhận qua TUI prompt
 │
 └── Workers (opencode serve, port 4091+)
@@ -74,7 +75,8 @@ Manager                  Plugin                    Workers
 | `worker_send <tên> "task"` | Gửi task (fire & forget, không block) |
 | `worker_result <tên>` | Đọc kết quả — **chỉ gọi sau khi nhận `!ev <tên> done`** |
 | `worker_allow <tên>` | Duyệt permission (once/always/never/index) |
-| `worker_choose <tên> <label\|index>` | Trả lời question của worker (tick chọn) — gọi sau `!ev <tên> ask` |
+| `worker_choose <tên> <label\|index>` | Trả lời question worker — hỗ trợ single & multiple choice (`[multi]`) |
+| `worker_choose <tên> "1,3"` | Chọn nhiều option (multiple-choice, gửi `1,3` cho worker) |
 | `worker_reject <tên>` | Từ chối question của worker |
 | `worker_kill <tên>` | Hủy worker |
 | `worker_killall` | Hủy tất cả workers |
@@ -91,6 +93,38 @@ Manager nhận events qua TUI prompt (plugin dùng `appendPrompt` + `submitPromp
 | `!ev <tên> done` | Worker hoàn thành task |
 | `!ev <tên> error [cls] <msg>` | Worker gặp lỗi. `cls` = quota/ratelimit/auth/context/network/model (phân loại lỗi model/provider) |
 | `!ev <tên> died exit=<code>` | Worker process bị killed |
+
+## Log monitor fallback
+
+SSE không phải lúc nào cũng emit `session.error` khi model provider trả về rate limit/quota error. Plugin có cơ chế **fallback** — monitor file log của worker:
+
+```
+/tmp/oc-<port>/opencode/log/opencode.log
+```
+
+**Cơ chế hoạt động:**
+1. Poll mỗi **1 giây**, so sánh file size
+2. Đọc bytes mới, dùng `classifyModelError()` detect patterns:
+   - **Rate limit** (429, `too many requests`, `throttle`, `rate_limit`, `retry-after`...)
+   - **Quota** (`exceeded`, `out of credits`, `insufficient`, `quota_exceeded`...)
+3. Nếu detect → push `!ev <worker> error [ratelimit|quota] <message>` tới Manager
+
+Đây là **bảo vệ kép** — SSE handler vẫn là primary, log monitor là fallback.
+
+## Race condition fix
+
+Trường hợp SSE `complete` event đến **trước** provider error (race condition):
+- Trước: SSE handlers reject rate limit/quota errors khi `done=true`
+- Sau: **Cho phép pass through** kể cả khi `done=true`, đảm bảo Manager luôn nhận được lỗi từ provider
+
+## Thay đổi gần đây
+
+| Thay đổi | Chi tiết |
+|----------|----------|
+| **Log monitor fallback** | Monitor log file detect rate limit/quota errors khi SSE không emit error event |
+| **Race condition fix** | SSE error handlers cho phép rate limit/quota pass through kể cả khi `done=true` |
+| **worker_killall fix** | `worker_killall` giờ cũng clear `starting` map (trước chỉ clear `workers`) |
+| **Tick-ask multi-choice** | `worker_choose` hỗ trợ multiple-choice: `worker_choose X "1,3"` |
 
 ## Cấu hình
 
