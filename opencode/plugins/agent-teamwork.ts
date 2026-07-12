@@ -76,6 +76,7 @@ class WorkerGateway {
   pendingQuestionMultiple = false
   private monitorAbort = new AbortController()
   private exitHandled = false
+  private stderrMonitorAbort = new AbortController()
 
   constructor(name: string, port: number, proc: any, sid: string, model: string) {
     this.name = name; this.port = port; this.proc = proc
@@ -86,7 +87,46 @@ class WorkerGateway {
     await pushManagerEvent(msg)
   }
 
+  private startStderrMonitor() {
+    const fs = require("fs")
+    const logPath = `/tmp/oc-${this.port}/opencode/log/opencode.log`
+
+    ;(async () => {
+      let lastSize = 0
+      try {
+        while (!this.dead && !this.stderrMonitorAbort.signal.aborted) {
+          try {
+            if (!fs.existsSync(logPath)) {
+              await Bun.sleep(1000)
+              continue
+            }
+            const stat = fs.statSync(logPath)
+            if (stat.size > lastSize) {
+              const fd = fs.openSync(logPath, "r")
+              const buf = Buffer.alloc(stat.size - lastSize)
+              fs.readSync(fd, buf, 0, buf.length, lastSize)
+              fs.closeSync(fd)
+              lastSize = stat.size
+
+              const text = buf.toString("utf-8")
+              const cls = classifyModelError(text)
+              if (cls === "ratelimit" || cls === "quota") {
+                if (!this.done) {
+                  this.done = true
+                  await this.push(`!ev ${this.name} error [${cls}] ${text.trim().split("\n").pop() || text}`)
+                }
+                break
+              }
+            }
+          } catch {}
+          await Bun.sleep(1000)
+        }
+      } catch {}
+    })()
+  }
+
   startMonitor() {
+    this.startStderrMonitor()
     this.monitorTask = (async () => {
       let running = true
       let backoff = 1000
@@ -152,6 +192,7 @@ class WorkerGateway {
 
     this.dead = true
     this.monitorAbort.abort()
+    this.stderrMonitorAbort.abort()
     if (workers.get(this.name) === this) workers.delete(this.name)
     await this.push(`!ev ${this.name} died exit=${code}`)
     await Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
@@ -192,9 +233,10 @@ class WorkerGateway {
 
     // Error events
     if ((this.hasTask || this.taskSent) && (t === "session.next.step.failed" || t === "session.next.tool.failed" || t === "session.next.error")) {
-      if (this.done) return
       const em = p.error?.message || p.message || "step failed"
       const cls = classifyModelError(em)
+      // Allow rate limit/quota errors through even if done (race: SSE complete before error)
+      if (this.done && cls !== "ratelimit" && cls !== "quota") return
       this.done = true
       await this.fetchAndCacheResult()
       await this.push(`!ev ${this.name} error [${cls}] ${em}`)
@@ -205,9 +247,10 @@ class WorkerGateway {
     // opencode phát qua event "session.error" (KHÔNG nằm trong session.next.*).
     // Nếu không bắt ở đây, Manager sẽ KHÔNG nhận được bất kỳ !ev error nào khi hết quota/limit.
     if (t === "session.error") {
-      if (this.done) return
       const { text, tag } = extractErrorText(raw, p)
       const cls = classifyModelError(text + " " + tag)
+      // Allow rate limit/quota errors through even if done (race: SSE complete before error)
+      if (this.done && cls !== "ratelimit" && cls !== "quota") return
       this.done = true
       await this.push(`!ev ${this.name} error [${cls}] ${text}`)
       return
@@ -438,6 +481,7 @@ class WorkerGateway {
     if (this.dead) return
     this.dead = true
     this.monitorAbort.abort()
+    this.stderrMonitorAbort.abort()
     if (this.proc) {
       this.proc.kill()
       try { await this.proc.exited } catch {}
@@ -483,26 +527,10 @@ async function startServe(port: number, name: string) {
     }
   )
 
-  let stderrTail = ""
-  const stderr = proc.stderr
-  void (async () => {
-    const reader = stderr.getReader()
-    const decoder = new TextDecoder()
-    try {
-      while (true) {
-        const chunk = await reader.read()
-        if (chunk.done) return
-        stderrTail = (stderrTail + decoder.decode(chunk.value, { stream: true })).slice(-4_000)
-      }
-    } catch {}
-  })()
-  const startupError = () => stderrTail.trim().replace(/\s+/g, " ").slice(-1_000)
-
   for (let i = 0; i < 30; i++) {
     if (proc.exitCode !== null) {
       proc.kill()
-      const detail = startupError()
-      throw new Error(`serve ${name} exited code=${proc.exitCode}${detail ? `: ${detail}` : ""}`)
+      throw new Error(`serve ${name} exited code=${proc.exitCode}`)
     }
     try {
       const controller = new AbortController()
@@ -514,8 +542,7 @@ async function startServe(port: number, name: string) {
     await Bun.sleep(500)
   }
   proc.kill()
-  const detail = startupError()
-  throw new Error(`serve ${name} not ready on port ${port}${detail ? `: ${detail}` : ""}`)
+  throw new Error(`serve ${name} not ready on port ${port}`)
 }
 
 async function createSession(port: number, name: string, agent: string): Promise<string> {
@@ -653,8 +680,9 @@ const tools = {
     args: {},
     async execute() {
       const active = [...workers.values()]
-      const n = workers.size
+      const n = workers.size + starting.size
       workers.clear()
+      starting.clear()
       await Promise.allSettled(active.map(gw => gw.kill()))
       return String(n)
     },
@@ -724,6 +752,7 @@ export const AgentTeamwork = async ({ client }: any) => {
   const cleanup = async () => {
     const active = [...workers.values()]
     workers.clear()
+    starting.clear()
     await Promise.allSettled(
       active.map(gw => Promise.race([
         gw.kill(),
