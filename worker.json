@@ -1,4 +1,4 @@
 {
-  "model": "zen-proxy/deepseek-v4-flash-free",
+  "model": "opencode/hy3-free",
   "max_workers": 5
 }

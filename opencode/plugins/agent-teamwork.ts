@@ -14,9 +14,7 @@ function loadWorkerConfig(): { model: string; max_workers: number } {
     return { model: "zen-proxy/deepseek-v4-flash-free", max_workers: 5 }
   }
 }
-const workerConfig = loadWorkerConfig()
-const DEFAULT_MODEL = workerConfig.model
-const MAX_WORKERS = workerConfig.max_workers
+
 const workers = new Map<string, WorkerGateway>()
 const starting = new Map<string, number>()
 let portCursor = 4091
@@ -410,6 +408,10 @@ const tools = {
       agent: tool.schema.string().optional(),
     },
     async execute(args: any) {
+      const config = loadWorkerConfig()
+      const DEFAULT_MODEL = config.model
+      const MAX_WORKERS = config.max_workers
+
       const name = args.name
       if (workers.has(name) || starting.has(name)) throw new Error(`worker ${name} đã tồn tại hoặc đang khởi tạo`)
       if (workers.size + starting.size >= MAX_WORKERS) throw new Error("đã đạt max worker")
@@ -430,6 +432,9 @@ const tools = {
           }
         }
         const agent = args.agent || "build"
+        if (agent !== "build" && agent !== "plan") {
+          throw new Error(`agent không hợp lệ: ${agent}. Chỉ hỗ trợ: build, plan`)
+        }
         const sid = await createSession(port, name, agent)
 
         const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL)
@@ -509,6 +514,43 @@ const tools = {
       workers.clear()
       await Promise.allSettled(active.map(gw => gw.kill()))
       return String(n)
+    },
+  }),
+
+  worker_set_model: tool({
+    description: "Cập nhật model trong worker.json.",
+    args: { model: tool.schema.string() },
+    async execute(args: any) {
+      const fs = require("fs")
+      const cfgPath = `${process.env.HOME}/.config/opencode/worker.json`
+      let cfg = { model: "zen-proxy/deepseek-v4-flash-free", max_workers: 5 }
+      try {
+        const file = fs.readFileSync(cfgPath, "utf-8")
+        cfg = JSON.parse(file)
+      } catch {}
+      cfg.model = args.model
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
+      return `model → ${args.model}`
+    },
+  }),
+
+  worker_get_model: tool({
+    description: "Xem model của worker (hoặc default từ worker.json nếu không truyền name).",
+    args: { name: tool.schema.string().optional() },
+    async execute(args: any) {
+      if (args.name) {
+        const gw = workers.get(args.name)
+        if (!gw) return `worker ${args.name} không tồn tại`
+        return `${args.name}: ${gw.model}`
+      }
+      const fs = require("fs")
+      const cfgPath = `${process.env.HOME}/.config/opencode/worker.json`
+      let cfg = { model: "zen-proxy/deepseek-v4-flash-free", max_workers: 5 }
+      try {
+        const file = fs.readFileSync(cfgPath, "utf-8")
+        cfg = JSON.parse(file)
+      } catch {}
+      return `default: ${cfg.model} (max_workers: ${cfg.max_workers})`
     },
   }),
 }

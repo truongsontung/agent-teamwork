@@ -33,14 +33,20 @@ echo "  ✓ config → $OPENDIR/worker.json"
 MGR="$SCRIPT_DIR/manager.json"
 mgr_desc=$(jq -r '.description' "$MGR")
 mgr_mode=$(jq -r '.mode' "$MGR")
-mgr_model=$(jq -r '.model' "$MGR")
+mgr_model=$(jq -r '.model // empty' "$MGR")
 mgr_prompt=$(jq -r '.prompt' "$MGR")
+
+if [ -n "$mgr_model" ]; then
+  model_line="model: $mgr_model"
+else
+  model_line=""
+fi
 
 cat > "$OPENDIR/agents/manager.md" <<AGENTEOF
 ---
 description: $mgr_desc
 mode: $mgr_mode
-model: $mgr_model
+$model_line
 permission:
   read: deny
   edit: deny
