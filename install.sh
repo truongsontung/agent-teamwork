@@ -24,6 +24,8 @@ if os.path.exists(cfg):
 # ── Plugin ───────────────────────────────────────────────
 cp "$SCRIPT_DIR/opencode/plugins/agent-teamwork.ts" "$OPENDIR/plugins/"
 echo "  ✓ plugin → $OPENDIR/plugins/agent-teamwork.ts"
+cp "$SCRIPT_DIR/opencode/plugins/agent-teamwork-scheduler.ts" "$OPENDIR/plugins/"
+echo "  ✓ scheduler plugin → $OPENDIR/plugins/agent-teamwork-scheduler.ts"
 
 # ── Worker config ────────────────────────────────────────
 cp "$SCRIPT_DIR/worker.json" "$OPENDIR/"

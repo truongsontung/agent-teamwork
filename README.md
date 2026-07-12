@@ -126,6 +126,50 @@ Trường hợp SSE `complete` event đến **trước** provider error (race co
 | **worker_killall fix** | `worker_killall` giờ cũng clear `starting` map (trước chỉ clear `workers`) |
 | **Tick-ask multi-choice** | `worker_choose` hỗ trợ multiple-choice: `worker_choose X "1,3"` |
 
+## Bộ nhắc việc & Lịch cá nhân (Scheduler plugin)
+
+Plugin riêng `agent-teamwork-scheduler.ts` (cùng codebase, deploy qua `install.sh`) cung cấp 2 mục:
+
+### 1. Bảng tiến độ dự án (Watchdog — đối chứng Worker × Manager)
+Theo dõi mọi tương tác worker↔manager qua **4 trạng thái task** kết hợp 2 trục độc lập:
+
+| Worker (W) | Manager (M) | Trạng thái | Nhắc |
+|------------|-------------|------------|------|
+| chưa xong | chưa đọc | PENDING | quá deadline → `overdue` |
+| chưa xong | đã đọc | STALE | `stale` (cảnh báo luồng sai) |
+| **đã xong** | **chưa đọc** | **UNCONSUMED** | `!ev X unconsumed` → đọc result ngay |
+| đã xong | đã đọc | COMPLETED | xong, tự xóa |
+
+Cộng thêm `permission_wait` / `ask_wait` khi worker chờ manager duyệt quyền / tick-chọn quá hạn.
+- W (worker) lấy **tự động** từ Gateway SSE qua bridge (không phụ thuộc manager nhớ báo) → giải quyết triệt để "worker xong mà manager quên đọc".
+- M (manager) lấy từ hành động thật (`worker_result` / `worker_allow` / `worker_choose` / `worker_reject`).
+
+Mỗi phút plugin bơm `!ev tick HH:MM pending=P unconsumed=U wait=W cal=C` để manager nắm tổng quan.
+
+**Nhắc việc thông minh (smart batch):** để tránh spam khi nhiều worker cùng cần nhắc, các hành động **quên** (`unconsumed` / `overdue` / `permission_wait` / `ask_wait` / `cal due`) được **gộp chung 1 lần / phút** thành `!ev remind N: <mục1> | <mục2> | ...` (mỗi mục: `<tên> <loại> <thời_gian>` hoặc `cal <id> <label>`). Riêng hành động **sai** (`stale` — đọc result trước khi worker xong) được **nhắc ngay, riêng biệt**, không gộp — vì cần xử lý khẩn cấp.
+
+### 2. Lịch làm việc cá nhân (Calendar)
+Manager tự lên lịch và đến giờ được nhắc (chỉ nhắc, không tự động gửi task):
+
+```
+cal_add "daily report" daily 09:00
+cal_add "standup" mon 09:00
+cal_add "check quota" in 30m
+cal_add "sync" 14:30
+cal_list / cal_del <id>
+```
+Đến giờ → `!ev cal due <id> <label>`.
+
+### Công cụ mới (Manager)
+| Tool | Mô tả |
+|------|-------|
+| `task_list` | Xem bảng tiến độ (task/permission/ask + lịch) |
+| `task_ack <tên>` | Đánh dấu đã xử lý xong task (xóa unconsumed) |
+| `task_deadline <tên> <phút>` | Đặt deadline → quá hạn chưa xong báo `overdue` |
+| `cal_add / cal_list / cal_del` | Lịch cá nhân |
+
+Trạng thái (bảng tiến độ + lịch) hiện tại **scoped trong phiên làm việc hiện tại**, không persist — phù hợp một manager đơn phiên. Nâng cấp sau: lịch chia sẻ đa-manager / đa-phiên (shared calendar) để các phiên đọc qua lại và tiếp nối phiên trước.
+
 ## Cấu hình
 
 | File | Chức năng |

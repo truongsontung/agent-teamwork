@@ -49,6 +49,11 @@ worker_reject <ten>                 — từ chối question của worker
 worker_kill <ten> / worker_killall
 worker_set_model "provider/model"   — cập nhật model mặc định trong worker.json (worker mới dùng model này). VD: nvidia/nemotron-3-ultra-550b-a55b
 worker_get_model [ten]              — xem model của worker (không truyền name = xem default từ worker.json)
+task_list                            — xem BẢNG TIẾN ĐỘ DỰ ÁN (trạng thái task/permission/ask mọi worker + lịch cá nhân)
+task_ack <ten>                       — đánh dấu đã xử lý xong task (xóa unconsumed)
+task_deadline <ten> <phút>           — đặt deadline cho task (quá hạn chưa xong → !ev X overdue)
+cal_add "<label>" <when>             — thêm lịch cá nhân. <when>: 14:30 | daily 09:00 | mon 09:00 | in 30m
+cal_list / cal_del <id>              — xem / xóa lịch cá nhân
 todowrite                           — CHỈ update KHI CÓ !ev done/permission/error (KHÔNG update liên tục)
 
 # TÁI SỬ DỤNG WORKER (QUAN TRỌNG)
@@ -65,6 +70,14 @@ Chỉ kill khi thực sự không cần nữa (worker_kill / worker_killall).
 !ev X done           — worker HOÀN THÀNH task (BẮT BUỘC có event này mới được gọi worker_result)
 !ev X error [cls] <msg> — worker gặp lỗi. cls = quota | ratelimit | auth | context | contentfilter | network | model (model/provider)
 !ev X died <reason>  — worker process bị crash bất thường
+!ev tick <HH:MM> pending=P unconsumed=U wait=W cal=C — nhịp đồng hồ mỗi phút (tóm tắt tiến độ)
+!ev X unconsumed <phút> — worker ĐÃ xong, manager CHƯA đọc result (NHẮC ĐỌC NGAY)
+!ev X overdue <phút>    — task quá deadline mà worker chưa xong
+!ev X stale             — manager đọc result trước khi worker xong (luồng sai / race)
+!ev X permission_wait <phút> — worker chờ duyệt quyền, manager chưa allow
+!ev X ask_wait <phút>   — worker chờ tick-chọn, manager chưa choose/reject
+!ev cal due <id> <label> — đến giờ lịch cá nhân, manager tự quyết định hành động
+!ev scheduler ready     — bộ nhắc việc đã khởi động
 
 # FLOW ĐƠN
 1. worker_create X
@@ -108,5 +121,21 @@ Chỉ kill khi thực sự không cần nữa (worker_kill / worker_killall).
 
 # DIED
 !ev X died <reason> → tự động xóa, tạo worker mới nếu cần
+
+# BỘ NHẮC VIỆC & LỊCH CÁ NHÂN (plugin agent-teamwork-scheduler)
+Đối chứng trạng thái Worker (W) × Manager (M) qua 4 trạng thái task:
+- PENDING: W chưa xong, M chưa đọc — đang chạy bình thường
+- STALE: W chưa xong, M đã đọc — luồng sai (cảnh báo)
+- UNCONSUMED: W ĐÃ xong, M chưa đọc — NHẮC ĐỌC result
+- COMPLETED: W xong, M đã đọc — xong, tự xóa
+
+Phản ứng:
+- `!ev X unconsumed` → LẬP TỨC `worker_result X` (worker đã xong, bạn quên đọc) → rồi `task_ack X`
+- `!ev X overdue` → worker chưa xong quá hạn → `worker_send` lại / đổi model / báo user
+- `!ev X stale` → báo user (bạn đọc result khi worker chưa xong — thường do race)
+- `!ev X permission_wait` → `worker_allow X`
+- `!ev X ask_wait` → `worker_choose X <lc>` hoặc `worker_reject X`
+- `!ev cal due <id> <label>` → thực hiện việc cá nhân (VD giao task worker / tổng kết). CHỈ NHẮC, tự bạn quyết định, không tự động gửi.
+- `!ev tick` mỗi phút → có thể `task_list` xem bảng tiến độ; KHÔNG bắt buộc update todo mỗi phút.
 
 # SỐ LƯỢNG: 1 domain=1 worker, song song=1/domain, max 5

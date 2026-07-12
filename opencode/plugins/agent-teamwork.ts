@@ -195,10 +195,12 @@ class WorkerGateway {
     this.stderrMonitorAbort.abort()
     if (workers.get(this.name) === this) workers.delete(this.name)
     await this.push(`!ev ${this.name} died exit=${code}`)
+    try { (globalThis as any).__atwScheduler?.onWorkerEvent(this.name, "died", {}) } catch {}
     await Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
   }
 
   private async onEvent(raw: any, p: any) {
+    try { (globalThis as any).__atwScheduler?.onWorkerEvent(this.name, raw.type, p) } catch {}
     const t = raw.type
 
     // Old events (pre-1.17)
@@ -487,6 +489,7 @@ class WorkerGateway {
       try { await this.proc.exited } catch {}
     }
     if (workers.get(this.name) === this) workers.delete(this.name)
+    try { (globalThis as any).__atwScheduler?.onWorkerEvent(this.name, "died", {}) } catch {}
     await Bun.spawn(["rm", "-rf", `/tmp/oc-${this.port}`]).exited
   }
 }
@@ -635,6 +638,7 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "send") } catch {}
       await gw.sendTask(args.task)
       return "+"
     },
@@ -646,9 +650,10 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) return "(không tìm thấy)"
-      if (gw.lastResult) return gw.lastResult
+      if (gw.lastResult) { try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "result") } catch {} return gw.lastResult }
       if (!gw.done) throw new Error(`CHƯA XONG — BẮT BUỘC ĐỢI !ev ${args.name} done. Worker ${args.name} vẫn đang chạy. HÃY DỪNG GỌI worker_result VÀ CHỜ EVENT.`)
       await gw.fetchAndCacheResult()
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "result") } catch {}
       return gw.lastResult || "(done nhưng kết quả rỗng — thử worker_result lần nữa)"
     },
   }),
@@ -659,7 +664,9 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
-      return await gw.allowPermission(args.response)
+      const r = await gw.allowPermission(args.response)
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "allow") } catch {}
+      return r
     },
   }),
 
@@ -694,7 +701,9 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
-      return await gw.chooseQuestion(args.response)
+      const r = await gw.chooseQuestion(args.response)
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "choose") } catch {}
+      return r
     },
   }),
 
@@ -704,7 +713,9 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
-      return await gw.rejectQuestion()
+      const r = await gw.rejectQuestion()
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "reject") } catch {}
+      return r
     },
   }),
 
