@@ -36,6 +36,12 @@ Ví dụ:
 Xây dựng login JWT: API backend + bảng DB + form frontend
 ```
 
+Ngoài điều phối worker, trong phiên Manager còn có **bộ nhắc việc & lịch cá nhân**
+(scheduler plugin, tự bật khi dùng worker/thêm lịch — không cần cấu hình thêm):
+- Theo dõi tiến độ worker qua bảng trạng thái (unconsumed / overdue / stale…)
+- Lên lịch cá nhân bằng `cal_add` (`daily`, `mon`, `in 30m`, `every 90m`…) và
+  được nhắc tới giờ. Xem chi tiết ở phần [Bộ nhắc việc & Lịch cá nhân](#bộ-nhắc-việc--lịch-cá-nhân-scheduler-plugin).
+
 ## Kiến trúc
 
 ```
