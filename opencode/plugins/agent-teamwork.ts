@@ -72,6 +72,7 @@ class WorkerGateway {
   proc: any
   sessionId: string
   model: string
+  agent: string
   done = false
   dead = false
   awaitingTask = false
@@ -86,9 +87,9 @@ class WorkerGateway {
   private exitHandled = false
   private stderrMonitorAbort = new AbortController()
 
-  constructor(name: string, port: number, proc: any, sid: string, model: string) {
+  constructor(name: string, port: number, proc: any, sid: string, model: string, agent: string) {
     this.name = name; this.port = port; this.proc = proc
-    this.sessionId = sid; this.model = model
+    this.sessionId = sid; this.model = model; this.agent = agent
   }
 
   private async push(msg: string) {
@@ -380,6 +381,9 @@ class WorkerGateway {
           body: JSON.stringify({
             parts: [{ type: "text", text: task }],
             model: { providerID: provider, modelID: modelId },
+            // Giữ đúng agent worker (build|plan) — nếu bỏ, prompt_async dùng
+            // agent mặc định (build) → worker "plan" bị biến thành "build".
+            agent: this.agent,
           }),
         }
       )
@@ -615,7 +619,7 @@ const tools = {
         }
         const sid = await createSession(port, name, agent)
 
-        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL)
+        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent)
         workers.set(name, gw)
         gw.startMonitor()
         return `+${name} (port ${port})`
