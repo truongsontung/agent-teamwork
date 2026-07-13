@@ -45,10 +45,36 @@ let pushQueue: Promise<void> = Promise.resolve()
 
 class PortInUseError extends Error {}
 
+async function getActiveSessionID(): Promise<string | undefined> {
+  if (!_client?.v2?.session) return undefined
+  try {
+    const res = await _client.v2.session.status()
+    const data = res.data
+    if (!data) return undefined
+    for (const [id, st] of Object.entries(data)) {
+      if ((st as any)?.type === "busy" || (st as any)?.type === "idle") return id
+    }
+    return undefined
+  } catch { return undefined }
+}
+
 async function pushManagerEvent(msg: string) {
   pushQueue = pushQueue
     .then(async () => {
       if (!_client) return
+      // Thử steer inject trực tiếp vào context
+      const sid = await getActiveSessionID()
+      if (sid && _client.v2?.session?.prompt) {
+        try {
+          await _client.v2.session.prompt({
+            sessionID: sid,
+            prompt: { text: msg },
+            delivery: "steer",
+          })
+          return
+        } catch { /* fall through to tui fallback */ }
+      }
+      // Fallback: appendPrompt + submitPrompt
       await _client.tui.appendPrompt({ body: { text: msg } })
       await _client.tui.submitPrompt()
     })
