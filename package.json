@@ -1,6 +1,6 @@
 {
   "name": "agent-teamwork",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Cài 1 lần — dùng mọi project. Bấm Tab để có Manager điều phối worker song song ngay trong opencode TUI.",
   "bin": {
     "agent-teamwork": "install.sh"
