@@ -2,18 +2,34 @@
   "name": "agent-teamwork",
   "version": "1.0.0",
   "description": "Cài 1 lần — dùng mọi project. Bấm Tab để có Manager điều phối worker song song ngay trong opencode TUI.",
-  "main": "index.js",
+  "bin": {
+    "agent-teamwork": "install.sh"
+  },
+  "files": [
+    "opencode/",
+    "worker.json",
+    "manager.json",
+    "install.sh"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "postinstall": "echo \"agent-teamwork: chạy 'npx agent-teamwork' để cài vào ~/.config/opencode\""
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/truongsontung/agent-teamwork.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agent",
+    "multi-agent",
+    "orchestration",
+    "manager",
+    "worker",
+    "scheduler"
+  ],
+  "author": "truongsontung",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/truongsontung/agent-teamwork/issues"
   },
