@@ -113,10 +113,11 @@ interface CalEvent {
   id: string
   label: string
   nextAt: number
-  repeat: "none" | "daily" | "weekly"
+  repeat: "none" | "daily" | "weekly" | "interval"
   hour: number
   minute: number
   dow?: number
+  intervalMs?: number  // với repeat="interval": chu kỳ lặp (mọi N phút)
   lastRemindAt?: number
   due?: boolean       // đã tới giờ, đang CHỜ manager cal_done/cal_del (nhắc lại tới khi xác nhận)
   dueAt?: number      // thời điểm tới hạn (để hiển thị "trễ Xm")
@@ -251,7 +252,18 @@ function parseWhen(when: string, now: number): CalEvent {
       const ms = rel[2].toLowerCase() === "h" ? n * 3600000 : n * 60000
       return { id: "", label: "", nextAt: now + ms, repeat: "none", hour: 0, minute: 0 }
     }
-    throw new Error("định dạng thời gian không hợp lệ. VD: 14:30 | daily 09:00 | mon 09:00 | in 30m")
+    throw new Error("định dạng thời gian không hợp lệ. VD: 14:30 | daily 09:00 | mon 09:00 | in 30m | every 90m")
+  }
+  // "every <N>m" | "every <N>h" — lặp mỗi N phút (chu kỳ bất kỳ; 1.5h = every 90m)
+  if (tokens[i]?.toLowerCase() === "every") {
+    const rel = tokens[i + 1]?.match(/^(\d+)(m|h)$/i)
+    if (rel) {
+      const n = parseInt(rel[1])
+      const ms = rel[2].toLowerCase() === "h" ? n * 3600000 : n * 60000
+      if (ms < 60000) throw new Error("chu kỳ lặp tối thiểu 1 phút (bộ nhắc quét mỗi phút)")
+      return { id: "", label: "", nextAt: now + ms, repeat: "interval", intervalMs: ms, hour: 0, minute: 0 }
+    }
+    throw new Error("định dạng chu kỳ không hợp lệ. VD: every 90m | every 30m | every 2h")
   }
   let dow: number | undefined
   if (DAY_MAP[tokens[i]?.toLowerCase()] !== undefined) {
@@ -272,7 +284,18 @@ function parseWhen(when: string, now: number): CalEvent {
   }
   return { id: "", label: "", nextAt: d.getTime(), repeat, hour, minute, dow }
 }
+function repeatLabel(ev: CalEvent): string {
+  if (ev.repeat !== "interval") return ev.repeat
+  const m = Math.round((ev.intervalMs || 0) / 60000)
+  return m % 60 === 0 ? `every ${m / 60}h` : `every ${m}m`
+}
 function nextOccurrence(ev: CalEvent, now: number): number {
+  if (ev.repeat === "interval") {
+    const step = ev.intervalMs || 60000
+    let n = ev.nextAt + step
+    while (n <= now) n += step
+    return n
+  }
   if (ev.repeat === "daily") {
     const d = new Date(now); d.setSeconds(0, 0); d.setMilliseconds(0); d.setHours(ev.hour, ev.minute, 0, 0)
     if (d.getTime() <= now) d.setDate(d.getDate() + 1)
@@ -384,7 +407,7 @@ async function tick() {
     } else {
       for (const ev of calendar.values()) {
         const till = Math.round((ev.nextAt - now) / 1000)
-        lines.push(`  ${ev.id} "${ev.label}" [${ev.repeat}] in=${till}s`)
+        lines.push(`  ${ev.id} "${ev.label}" [${repeatLabel(ev)}] in=${till}s`)
       }
     }
 
@@ -465,7 +488,7 @@ const tools = {
         const st = ev.due
           ? `🔔 chờ xác nhận (trễ ${Math.max(0, Math.round((nowc - (ev.dueAt || nowc)) / 60000))}m)`
           : `⏰ ${new Date(ev.nextAt).toTimeString().slice(0, 5)}`
-        lines.push(`  ${ev.id} ${st} [${ev.repeat}] ${ev.label}`)
+        lines.push(`  ${ev.id} ${st} [${repeatLabel(ev)}] ${ev.label}`)
       }
       return lines.join("\n")
     },
@@ -485,7 +508,7 @@ const tools = {
   }),
 
   cal_add: tool({
-    description: 'Thêm lịch cá nhân. VD: cal_add "daily report" daily 09:00 | cal_add "standup" mon 09:00 | cal_add "check" in 30m | cal_add "sync" 14:30',
+    description: 'Thêm lịch cá nhân. VD: cal_add "daily report" daily 09:00 | cal_add "standup" mon 09:00 | cal_add "check" in 30m | cal_add "sync" 14:30 | cal_add "poll" every 90m (lặp mỗi N phút, chu kỳ bất kỳ: 1.5h=every 90m)',
     args: { label: tool.schema.string(), when: tool.schema.string() },
     async execute(args: any) {
       if (ensureRunning()) push("!ev scheduler ready")
@@ -494,7 +517,7 @@ const tools = {
       ev.label = args.label
       calendar.set(ev.id, ev)
       saveCal()
-      return `+${ev.id} ${new Date(ev.nextAt).toTimeString().slice(0, 5)} [${ev.repeat}] ${ev.label}`
+      return `+${ev.id} ${new Date(ev.nextAt).toTimeString().slice(0, 5)} [${repeatLabel(ev)}] ${ev.label}`
     },
   }),
 
@@ -508,7 +531,7 @@ const tools = {
         const st = ev.due
           ? `🔔 chờ xác nhận (trễ ${Math.max(0, Math.round((now - (ev.dueAt || now)) / 60000))}m)`
           : `⏰ ${new Date(ev.nextAt).toTimeString().slice(0, 5)}`
-        return `${ev.id} ${st} [${ev.repeat}] ${ev.label}`
+        return `${ev.id} ${st} [${repeatLabel(ev)}] ${ev.label}`
       }).join("\n")
     },
   }),

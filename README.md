@@ -167,11 +167,14 @@ Manager tự lên lịch và đến giờ được nhắc (chỉ nhắc, không 
 cal_add "daily report" daily 09:00
 cal_add "standup" mon 09:00
 cal_add "check quota" in 30m
+cal_add "poll build" every 90m     # lặp mỗi N phút (chu kỳ bất kỳ: 1.5h = every 90m)
 cal_add "sync" 14:30
 cal_list                 # ⏰ sắp tới / 🔔 chờ xác nhận
 cal_done <id>            # đã làm kỳ này (1-lần→xóa, lặp→dời kỳ kế)
 cal_del <id>             # bỏ hẳn (dừng vĩnh viễn)
 ```
+
+Các dạng `<when>`: `HH:MM` (1-lần) · `in <N>m|h` (1-lần sau N) · `daily HH:MM` · `<thứ> HH:MM` (mon…sun, lặp tuần) · `every <N>m|h` (lặp mỗi N phút, chu kỳ bất kỳ — manager tự quy đổi ra phút).
 
 **Nhắc tới khi xác nhận (không bỏ lỡ):** đến giờ → `!ev cal due <id> <label>`, và **nhắc lại mỗi 5 phút** cho tới khi Manager đóng vòng bằng `cal_done` (đã làm) hoặc `cal_del` (bỏ hẳn). Lịch **1-lần** `cal_done` → xóa; lịch **lặp** `cal_done` → dời sang kỳ kế và ngừng nhắc tới kỳ đó.
 
