@@ -10,7 +10,8 @@ git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
 ```
 
 Script sẽ cài vào `~/.config/opencode/`:
-- `plugins/agent-teamwork.ts` — plugin chính
+- `plugins/agent-teamwork.ts` — plugin chính (bridge điều phối worker)
+- `plugins/agent-teamwork-scheduler.ts` — plugin nhắc việc + lịch cá nhân
 - `agents/manager.md` — Manager agent definition
 - `worker.json` — worker config (model, max_workers)
 
@@ -39,13 +40,13 @@ opencode TUI
 │   ├── Spawn opencode serve processes (workers)
 │   ├── SSE monitor per worker (real-time events)
 │   ├── Log monitor fallback (poll log file 1s, detect rate limit/quota)
-│   └── appendPrompt("!ev X done") → Manager nhận qua TUI prompt
+│   └── session.promptAsync("!ev X done") → gửi thẳng vào session Manager
 │
 └── Workers (opencode serve, port 4091+)
     └── Context độc lập, model config riêng
 ```
 
-**Manager không có quyền read/edit/write** — mọi thao tác code phải qua worker. Plugin bắn sự kiện `!ev` vào TUI prompt, Manager xử lý ngay không cần poll.
+**Manager không có quyền read/edit/write** — mọi thao tác code phải qua worker. Plugin bắn sự kiện `!ev` **thẳng vào session** của Manager (qua `session.promptAsync`), Manager xử lý ngay không cần poll.
 
 ## Event-driven workflow
 
@@ -83,7 +84,7 @@ Manager                  Plugin                    Workers
 
 ## Events (!ev)
 
-Manager nhận events qua TUI prompt (plugin dùng `appendPrompt` + `submitPrompt`):
+Manager nhận events **gửi thẳng vào session** (plugin dùng `session.promptAsync`, không đụng ô input chung của TUI):
 
 | Event | Ý nghĩa |
 |-------|----------|
@@ -117,10 +118,21 @@ Trường hợp SSE `complete` event đến **trước** provider error (race co
 - Trước: SSE handlers reject rate limit/quota errors khi `done=true`
 - Sau: **Cho phép pass through** kể cả khi `done=true`, đảm bảo Manager luôn nhận được lỗi từ provider
 
+## Cơ chế bơm sự kiện (`session.promptAsync`)
+
+Plugin đẩy `!ev` vào Manager bằng cách gọi thẳng `client.session.promptAsync` tới **đúng session** của Manager (session ID bắt tự động qua `event` hook), thay vì ghi vào ô input chung của TUI.
+
+**Vì sao không dùng `appendPrompt` + `submitPrompt` nữa** — cách cũ ghi vào ô input chung gây 2 lỗi:
+1. Khi Manager **idle** và user đang gõ prompt dở → `appendPrompt` chèn `!ev` vào chung, `submitPrompt` đẩy **cả prompt dở của user lẫn `!ev`** đi cùng lúc.
+2. Khi tick đến lúc Manager **đang thinking** → text kẹt lại trong ô input, tick sau đẩy dồn cả hai vào một lượt.
+
+`session.promptAsync` ghi thẳng vào session (hiện trong hội thoại + kích hoạt Manager, non-blocking) nên **không đụng ô input** → cả 2 lỗi biến mất. Áp dụng cho cả bridge (`agent-teamwork.ts`) và scheduler (`agent-teamwork-scheduler.ts`).
+
 ## Thay đổi gần đây
 
 | Thay đổi | Chi tiết |
 |----------|----------|
+| **Bơm `!ev` qua `session.promptAsync`** | Gửi thẳng vào session Manager thay cho `appendPrompt`/`submitPrompt` — sửa lỗi lẫn với prompt dở của user & kẹt input khi thinking |
 | **Log monitor fallback** | Monitor log file detect rate limit/quota errors khi SSE không emit error event |
 | **Race condition fix** | SSE error handlers cho phép rate limit/quota pass through kể cả khi `done=true` |
 | **worker_killall fix** | `worker_killall` giờ cũng clear `starting` map (trước chỉ clear `workers`) |
@@ -164,9 +176,10 @@ cal_list / cal_del <id>
 | Tool | Mô tả |
 |------|-------|
 | `task_list` | Xem bảng tiến độ (task/permission/ask + lịch) |
-| `task_ack <tên>` | Đánh dấu đã xử lý xong task (xóa unconsumed) |
 | `task_deadline <tên> <phút>` | Đặt deadline → quá hạn chưa xong báo `overdue` |
 | `cal_add / cal_list / cal_del` | Lịch cá nhân |
+| `scheduler_start` | Bật thủ công bộ nhắc (thường tự bật khi Manager dùng worker/thêm lịch) |
+| `scheduler_verbose <on\|off>` | Bật/tắt log chi tiết mỗi phút (mặc định off, reset khi restart) |
 
 Trạng thái (bảng tiến độ + lịch) hiện tại **scoped trong phiên làm việc hiện tại**, không persist — phù hợp một manager đơn phiên. Nâng cấp sau: lịch chia sẻ đa-manager / đa-phiên (shared calendar) để các phiên đọc qua lại và tiếp nối phiên trước.
 
@@ -239,6 +252,7 @@ cd ~/agent-teamwork && git pull && ./install.sh
 
 ```bash
 rm ~/.config/opencode/plugins/agent-teamwork.ts
+rm ~/.config/opencode/plugins/agent-teamwork-scheduler.ts
 rm ~/.config/opencode/agents/manager.md
 ```
 

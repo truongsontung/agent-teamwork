@@ -14,6 +14,7 @@ tool.schema = z
 // ════════════════════════════════════════════════════════════════════════
 
 let _client: any = null
+let _lastSessionID: string | undefined = undefined
 
 const REMIND_INTERVAL_MS = 5 * 60 * 1000        // throttle nhắc thường
 const UNCONSUMED_INTERVAL_MS = 2 * 60 * 1000     // unconsumed ưu tiên cao
@@ -60,41 +61,20 @@ let verbose = false               // bật/tắt log chi tiết mỗi phút
 
 let pushQueue: Promise<void> = Promise.resolve()
 
-async function getActiveSessionID(): Promise<string | undefined> {
-  if (!_client?.v2?.session) return undefined
-  try {
-    const res = await _client.v2.session.status()
-    const data = res.data
-    if (!data) return undefined
-    // Find first session that is busy (active) or idle
-    for (const [id, st] of Object.entries(data)) {
-      if ((st as any)?.type === "busy" || (st as any)?.type === "idle") return id
-    }
-    return undefined
-  } catch { return undefined }
-}
-
 async function push(msg: string) {
   pushQueue = pushQueue
     .then(async () => {
-      if (!_client) return
-      // Thử steer inject trực tiếp vào context
-      const sid = await getActiveSessionID()
-      if (sid && _client.v2?.session?.prompt) {
-        try {
-          await _client.v2.session.prompt({
-            sessionID: sid,
-            prompt: { text: msg },
-            delivery: "steer",
-          })
-          return
-        } catch { /* fall through to tui fallback */ }
-      }
-      // Fallback: appendPrompt + submitPrompt
-      await _client.tui.appendPrompt({ body: { text: msg } })
-      await _client.tui.submitPrompt()
+      const sid = _lastSessionID
+      if (!sid || !_client?.session?.promptAsync) return
+      // Gửi thẳng vào session (hiện trong hội thoại + kích hoạt manager),
+      // KHÔNG dùng ô input chung → tránh 2 bug: chèn vào prompt dở của user,
+      // và kẹt input khi manager đang thinking.
+      await _client.session.promptAsync({
+        path: { id: sid },
+        body: { parts: [{ type: "text", text: msg }] },
+      })
     })
-    .catch((e: any) => { console.error(`[Scheduler] push error: ${e?.message || e}`) })
+    .catch(() => {})
   await pushQueue
 }
 
@@ -476,6 +456,13 @@ export const AgentTeamworkScheduler = async ({ client }: any) => {
     async dispose() {
       stopClock()
       ;(globalThis as any).__atwScheduler = undefined
+    },
+    event: async ({ event }: any) => {
+      // Bắt sessionID hiện hành từ mọi event có chứa nó
+      const sid = event?.properties?.sessionID
+        || event?.properties?.info?.sessionID
+        || event?.properties?.info?.id
+      if (sid && typeof sid === "string" && sid.startsWith("ses_")) _lastSessionID = sid
     },
     tool: tools,
   }

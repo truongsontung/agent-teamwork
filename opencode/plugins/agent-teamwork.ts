@@ -25,6 +25,7 @@ function extractErrorText(raw: any, p: any): { text: string; tag: string } {
 }
 
 let _client: any = null
+let _lastSessionID: string | undefined = undefined
 
 function loadWorkerConfig(): { model: string; max_workers: number } {
   try {
@@ -45,42 +46,20 @@ let pushQueue: Promise<void> = Promise.resolve()
 
 class PortInUseError extends Error {}
 
-async function getActiveSessionID(): Promise<string | undefined> {
-  if (!_client?.v2?.session) return undefined
-  try {
-    const res = await _client.v2.session.status()
-    const data = res.data
-    if (!data) return undefined
-    for (const [id, st] of Object.entries(data)) {
-      if ((st as any)?.type === "busy" || (st as any)?.type === "idle") return id
-    }
-    return undefined
-  } catch { return undefined }
-}
-
 async function pushManagerEvent(msg: string) {
   pushQueue = pushQueue
     .then(async () => {
-      if (!_client) return
-      // Thử steer inject trực tiếp vào context
-      const sid = await getActiveSessionID()
-      if (sid && _client.v2?.session?.prompt) {
-        try {
-          await _client.v2.session.prompt({
-            sessionID: sid,
-            prompt: { text: msg },
-            delivery: "steer",
-          })
-          return
-        } catch { /* fall through to tui fallback */ }
-      }
-      // Fallback: appendPrompt + submitPrompt
-      await _client.tui.appendPrompt({ body: { text: msg } })
-      await _client.tui.submitPrompt()
+      const sid = _lastSessionID
+      if (!sid || !_client?.session?.promptAsync) return
+      // Gửi thẳng vào session (hiện trong hội thoại + kích hoạt manager),
+      // KHÔNG dùng ô input chung → tránh 2 bug: chèn vào prompt dở của user,
+      // và kẹt input khi manager đang thinking.
+      await _client.session.promptAsync({
+        path: { id: sid },
+        body: { parts: [{ type: "text", text: msg }] },
+      })
     })
-    .catch((e: any) => {
-      console.error(`[Gateway] push error: ${e.message || e}`)
-    })
+    .catch(() => {})
   await pushQueue
 }
 
@@ -341,11 +320,6 @@ class WorkerGateway {
       this.pendingQuestionLabels = []
       this.pendingQuestionMultiple = false
       return
-    }
-
-    // Debug: log unknown session.next events
-    if (t.startsWith("session.next.")) {
-      console.log(`[GW:${this.name}] event: ${t}`)
     }
   }
 
@@ -812,6 +786,12 @@ export const AgentTeamwork = async ({ client }: any) => {
       process.removeAllListeners("SIGINT")
       process.removeAllListeners("SIGTERM")
       await cleanup()
+    },
+    event: async ({ event }: any) => {
+      const sid = event?.properties?.sessionID
+        || event?.properties?.info?.sessionID
+        || event?.properties?.info?.id
+      if (sid && typeof sid === "string" && sid.startsWith("ses_")) _lastSessionID = sid
     },
     tool: tools,
   }
