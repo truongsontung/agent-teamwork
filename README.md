@@ -168,28 +168,37 @@ cal_add "daily report" daily 09:00
 cal_add "standup" mon 09:00
 cal_add "check quota" in 30m
 cal_add "sync" 14:30
-cal_list / cal_del <id>
+cal_list                 # ⏰ sắp tới / 🔔 chờ xác nhận
+cal_done <id>            # đã làm kỳ này (1-lần→xóa, lặp→dời kỳ kế)
+cal_del <id>             # bỏ hẳn (dừng vĩnh viễn)
 ```
-Đến giờ → `!ev cal due <id> <label>`.
+
+**Nhắc tới khi xác nhận (không bỏ lỡ):** đến giờ → `!ev cal due <id> <label>`, và **nhắc lại mỗi 5 phút** cho tới khi Manager đóng vòng bằng `cal_done` (đã làm) hoặc `cal_del` (bỏ hẳn). Lịch **1-lần** `cal_done` → xóa; lịch **lặp** `cal_done` → dời sang kỳ kế và ngừng nhắc tới kỳ đó.
 
 ### Công cụ mới (Manager)
 | Tool | Mô tả |
 |------|-------|
 | `task_list` | Xem bảng tiến độ (task/permission/ask + lịch) |
 | `task_deadline <tên> <phút>` | Đặt deadline → quá hạn chưa xong báo `overdue` |
-| `cal_add / cal_list / cal_del` | Lịch cá nhân |
+| `cal_add / cal_list / cal_done / cal_del` | Lịch cá nhân |
 | `scheduler_start` | Bật thủ công bộ nhắc (thường tự bật khi Manager dùng worker/thêm lịch) |
 | `scheduler_verbose <on\|off>` | Bật/tắt log chi tiết mỗi phút (mặc định off, reset khi restart) |
 
-### Lưu lịch theo session (persist)
+### Lưu trạng thái theo session (persist)
 
-**Lịch cá nhân được lưu theo từng session** tại `~/.local/share/agent-teamwork/scheduler/<sessionID>.json`. Khi mở lại đúng session (restart opencode), lịch tự nạp lại và **bộ nhắc chạy tiếp** — không cần thao tác gì:
+Dữ liệu lưu theo từng session tại `~/.local/share/agent-teamwork/scheduler/`, mỗi session **2 file riêng**:
 
-- Lịch **lặp** (`daily`/`weekly`) quá hạn trong lúc đóng app → tự dời tới lần kế tiếp trong tương lai.
-- Lịch **1 lần** đã qua giờ → báo "đã lỡ" ngay lần quét đầu sau khi mở lại.
-- Mỗi session có file riêng → không lẫn lịch giữa các session.
+**`<sessionID>.cal.json` — Lịch cá nhân.** Luôn tồn tại, **persist qua mọi lần thoát**. Mở lại đúng session (restart opencode) → lịch tự nạp lại và bộ nhắc chạy tiếp:
+- Lịch **lặp** (`daily`/`weekly`) quá hạn trong lúc đóng app → tự dời tới lần kế tiếp.
+- Lịch **1 lần** đã qua giờ → báo "đã lỡ" ngay lần quét đầu.
+- Mục đang **🔔 chờ xác nhận** (due) → giữ nguyên, tiếp tục nhắc sau restart.
 
-**Không lưu** bảng tiến độ task worker: worker là process riêng, chết khi opencode đóng → khôi phục sẽ là dữ liệu chết, gây nhắc sai. Bảng tiến độ vẫn scoped trong phiên hiện tại.
+**`<sessionID>.tasks.json` — Sổ giao việc (crash-continuity).** Ghi tăng dần mỗi lần Manager `worker_send` (chỉ lưu `{worker, tóm tắt task, lúc giao}`). Cơ chế "cờ tắt sạch":
+- `worker_kill` → gỡ mục của worker đó; `worker_killall` → xóa sạch ("đóng sổ").
+- **Thoát chủ động** (Ctrl+C / opencode tắt plugin đúng cách) → **xóa cả file** → phiên sau **không** nhắc.
+- **Crash thật** (kill -9, mất điện, OOM) → không kịp xóa → file còn lại → phiên sau phát `!ev resume N <...>` để Manager tạo lại worker & giao lại việc dang dở, rồi xóa file (bắt đầu sổ mới).
+
+Lý do sổ giao việc tối giản: worker là process riêng, **crash là mất sạch dữ liệu** → chỉ cần nhớ "đã giao việc gì cho ai" để giao lại, không khôi phục kết quả chi tiết. Worker **died** (kể cả bị cleanup kill khi Ctrl+C) **không** tự gỡ khỏi sổ — chỉ `worker_kill/killall` do Manager chủ động mới đóng sổ.
 
 ## Cấu hình
 

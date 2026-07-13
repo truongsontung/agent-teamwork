@@ -20,17 +20,23 @@ const REMIND_INTERVAL_MS = 5 * 60 * 1000        // throttle nhắc thường
 const UNCONSUMED_INTERVAL_MS = 2 * 60 * 1000     // unconsumed ưu tiên cao
 const BATCH_WINDOW_MS = 60 * 1000                // cửa sổ gộp: nhắc luôn các mục đến lịch trong 1 phút tới
 
-// ── Persist lịch cá nhân THEO SESSION ────────────────────────────────────
-// Chỉ lưu CALENDAR (lịch/bộ nhắc). Task worker KHÔNG lưu vì worker process
-// chết khi opencode đóng → khôi phục sẽ là dữ liệu chết, gây nhắc sai.
-// Mục tiêu: mở lại đúng session → lịch & bộ nhắc tự chạy tiếp.
+// ── Persist THEO SESSION ─────────────────────────────────────────────────
+// Hai file riêng cho mỗi session (tại STATE_DIR):
+//   <sid>.cal.json   → LỊCH CÁ NHÂN. Luôn tồn tại, persist qua MỌI lần thoát.
+//   <sid>.tasks.json → SỔ GIAO VIỆC (crash-continuity). Ghi tăng dần mỗi lần
+//     manager giao task; xóa mục khi kill; xóa sạch khi killall; XÓA CẢ FILE khi
+//     thoát CHỦ ĐỘNG (cờ tắt sạch). Còn sót lúc mở lại = phiên trước CRASH thật
+//     (kill -9 / mất điện, không kịp xóa) → nhắc !ev resume rồi xóa, bắt đầu sổ mới.
 const STATE_DIR = `${process.env.HOME}/.local/share/agent-teamwork/scheduler`
 
-function stateFile(): string | undefined {
-  return _lastSessionID ? `${STATE_DIR}/${_lastSessionID}.json` : undefined
+function calFile(): string | undefined {
+  return _lastSessionID ? `${STATE_DIR}/${_lastSessionID}.cal.json` : undefined
 }
-function save() {
-  const f = stateFile()
+function tasksFile(): string | undefined {
+  return _lastSessionID ? `${STATE_DIR}/${_lastSessionID}.tasks.json` : undefined
+}
+function saveCal() {
+  const f = calFile()
   if (!f) return
   try {
     const fs = require("fs")
@@ -38,8 +44,8 @@ function save() {
     fs.writeFileSync(f, JSON.stringify({ calSeq, calendar: [...calendar.values()] }))
   } catch {}
 }
-function load() {
-  const f = stateFile()
+function loadCal() {
+  const f = calFile()
   if (!f) return
   try {
     const fs = require("fs")
@@ -47,12 +53,45 @@ function load() {
     const now = Date.now()
     calendar.clear()
     for (const ev of (data.calendar || [])) {
-      // Lịch lặp quá hạn (đóng app lâu) → dời tới lần kế tiếp trong tương lai.
-      // Lịch 1 lần đã qua → giữ nguyên để tick báo "đã lỡ" ngay lần quét đầu.
-      if (ev.repeat !== "none" && ev.nextAt <= now) ev.nextAt = nextOccurrence(ev, now)
+      // Lịch lặp quá hạn (đóng app lâu) & CHƯA đang chờ xác nhận → dời tới kỳ kế.
+      // Lịch 1 lần quá hạn, hoặc mục đang "chờ xác nhận" (due) → giữ nguyên để
+      // tick nhắc tiếp ngay lần quét đầu.
+      if (ev.repeat !== "none" && ev.nextAt <= now && !ev.due) ev.nextAt = nextOccurrence(ev, now)
       calendar.set(ev.id, ev)
     }
     if (typeof data.calSeq === "number" && data.calSeq > calSeq) calSeq = data.calSeq
+  } catch {}
+}
+function saveTasks() {
+  const f = tasksFile()
+  if (!f) return
+  try {
+    const fs = require("fs")
+    fs.mkdirSync(STATE_DIR, { recursive: true })
+    if (taskLedger.length === 0) { try { fs.unlinkSync(f) } catch {} ; return }
+    fs.writeFileSync(f, JSON.stringify(taskLedger))
+  } catch {}
+}
+// Xóa file sổ giao việc = "cờ tắt sạch". Gọi khi thoát CHỦ ĐỘNG (dispose/exit).
+function clearTasksFile() {
+  const f = tasksFile()
+  if (!f) return
+  try { require("fs").unlinkSync(f) } catch {}
+}
+// Nạp sổ lúc mở session. Có nội dung = phiên trước CRASH (không kịp xóa) →
+// nhắc manager việc dang dở rồi xóa file + bắt đầu sổ mới.
+function loadTasks() {
+  const f = tasksFile()
+  if (!f) return
+  try {
+    const fs = require("fs")
+    const arr = JSON.parse(fs.readFileSync(f, "utf8"))
+    fs.unlinkSync(f)
+    taskLedger = []
+    if (Array.isArray(arr) && arr.length) {
+      const summary = arr.map((t: TaskLog) => `${t.worker}: ${t.task}`).join(" | ")
+      push(`!ev resume ${arr.length} việc dang dở từ phiên trước (worker đã mất khi crash, cần tạo lại worker & giao lại): ${summary}`)
+    }
   } catch {}
 }
 
@@ -79,10 +118,16 @@ interface CalEvent {
   minute: number
   dow?: number
   lastRemindAt?: number
+  due?: boolean       // đã tới giờ, đang CHỜ manager cal_done/cal_del (nhắc lại tới khi xác nhận)
+  dueAt?: number      // thời điểm tới hạn (để hiển thị "trễ Xm")
 }
+// Sổ giao việc: mỗi mục = 1 lần manager giao task cho worker. Chỉ để
+// crash-continuity, tối giản (worker + tóm tắt task + lúc giao).
+interface TaskLog { worker: string; task: string; at: number }
 
 const interactions = new Map<string, Item>()
 const calendar = new Map<string, CalEvent>()
+let taskLedger: TaskLog[] = []
 let seq = 0
 let calSeq = 0
 let clockTimer: any = null
@@ -168,14 +213,26 @@ function onWorkerEvent(name: string, type: string, _p: any) {
     }
   }
 }
-function onManagerAction(name: string, kind: string) {
+function onManagerAction(name: string, kind: string, detail?: string) {
   const now = Date.now()
-  if (kind === "send") createTask(name, now, false)
-  else if (kind === "result") {
+  if (kind === "send") {
+    createTask(name, now, false)
+    // Ghi vào sổ giao việc (crash-continuity). Kill/killall sẽ "đóng sổ".
+    taskLedger.push({ worker: name, task: (detail || "").replace(/\s+/g, " ").trim().slice(0, 200), at: now })
+    saveTasks()
+  } else if (kind === "result") {
     const it = latestTaskNotActed(name)
     if (it) { it.mActed = true; it.mAt = now }
   } else if (kind === "allow") markActed(name, "permission")
   else if (kind === "choose" || kind === "reject") markActed(name, "ask")
+  else if (kind === "kill") {
+    // Manager đóng sổ cho 1 worker → gỡ mọi mục của worker đó khỏi sổ giao việc.
+    taskLedger = taskLedger.filter(t => t.worker !== name)
+    saveTasks()
+  } else if (kind === "killall") {
+    taskLedger = []
+    saveTasks()
+  }
 }
 
 // ── Calendar parsing ──────────────────────────────────────────────────────
@@ -252,13 +309,21 @@ async function tick() {
   const nearCal: CalEvent[] = []
   let trulyDue = 0
 
-  // 1) Lịch cá nhân: chia "đã đến giờ" (due) và "sắp đến trong 1 phút" (near)
+  // 1) Lịch cá nhân: tới giờ → chuyển "chờ xác nhận" (due) và nhắc. Sau đó
+  //    NHẮC LẠI mỗi REMIND_INTERVAL cho tới khi manager cal_done/cal_del.
+  //    KHÔNG tự dời/xóa — buộc manager đóng vòng để không bỏ lỡ.
   for (const [id, ev] of calendar) {
-    if (now >= ev.nextAt) {
+    if (ev.due) {
+      if (!ev.lastRemindAt || now - ev.lastRemindAt >= REMIND_INTERVAL_MS) {
+        const late = Math.max(0, Math.round((now - (ev.dueAt || now)) / 60000))
+        pendingBatch.push(`cal ${id} ${ev.label}${late ? ` (trễ ${late}m)` : ""}`)
+        ev.lastRemindAt = now
+        trulyDue++
+      }
+    } else if (now >= ev.nextAt) {
+      ev.due = true; ev.dueAt = ev.nextAt; ev.lastRemindAt = now
       pendingBatch.push(`cal ${id} ${ev.label}`)
       trulyDue++
-      if (ev.repeat === "none") calendar.delete(id)
-      else { ev.nextAt = nextOccurrence(ev, now); ev.lastRemindAt = now }
     } else if (ev.nextAt <= now + BATCH_WINDOW_MS) {
       nearCal.push(ev)
     }
@@ -331,7 +396,7 @@ async function tick() {
     await push(lines.join("\n"))
   }
 
-  save()
+  saveCal()
 }
 
 // Trả về số lượng mục "quên" đã đến lúc nhắc (truly due) được gộp vào pendingBatch.
@@ -395,7 +460,13 @@ const tools = {
       for (const [n, arr] of byName) { lines.push(`• ${n}`); lines.push(...arr) }
       lines.push("== LỊCH CÁ NHÂN ==")
       if (calendar.size === 0) lines.push("  (trống)")
-      for (const ev of calendar.values()) lines.push(`  ${ev.id} ${new Date(ev.nextAt).toTimeString().slice(0, 5)} [${ev.repeat}] ${ev.label}`)
+      const nowc = Date.now()
+      for (const ev of calendar.values()) {
+        const st = ev.due
+          ? `🔔 chờ xác nhận (trễ ${Math.max(0, Math.round((nowc - (ev.dueAt || nowc)) / 60000))}m)`
+          : `⏰ ${new Date(ev.nextAt).toTimeString().slice(0, 5)}`
+        lines.push(`  ${ev.id} ${st} [${ev.repeat}] ${ev.label}`)
+      }
       return lines.join("\n")
     },
   }),
@@ -422,25 +493,49 @@ const tools = {
       ev.id = `cal-${++calSeq}`
       ev.label = args.label
       calendar.set(ev.id, ev)
-      save()
+      saveCal()
       return `+${ev.id} ${new Date(ev.nextAt).toTimeString().slice(0, 5)} [${ev.repeat}] ${ev.label}`
     },
   }),
 
   cal_list: tool({
-    description: "Xem lịch cá nhân.",
+    description: "Xem lịch cá nhân (kèm trạng thái: ⏰ sắp tới / 🔔 chờ xác nhận).",
     args: {},
     async execute() {
       if (calendar.size === 0) return "(trống)"
-      return [...calendar.values()].map(ev => `${ev.id} ${new Date(ev.nextAt).toTimeString().slice(0, 5)} [${ev.repeat}] ${ev.label}`).join("\n")
+      const now = Date.now()
+      return [...calendar.values()].map(ev => {
+        const st = ev.due
+          ? `🔔 chờ xác nhận (trễ ${Math.max(0, Math.round((now - (ev.dueAt || now)) / 60000))}m)`
+          : `⏰ ${new Date(ev.nextAt).toTimeString().slice(0, 5)}`
+        return `${ev.id} ${st} [${ev.repeat}] ${ev.label}`
+      }).join("\n")
+    },
+  }),
+
+  cal_done: tool({
+    description: "Xác nhận ĐÃ LÀM XONG sự kiện lịch (kỳ này) khi nhận !ev cal due. Lịch 1-lần → xóa hẳn. Lịch lặp (daily/weekly) → dời sang kỳ kế & ngừng nhắc tới kỳ đó.",
+    args: { id: tool.schema.string() },
+    async execute(args: any) {
+      const ev = calendar.get(args.id)
+      if (!ev) return "(không tìm thấy)"
+      if (ev.repeat === "none") {
+        calendar.delete(args.id)
+        saveCal()
+        return `done ${args.id} (đã xóa)`
+      }
+      ev.nextAt = nextOccurrence(ev, Date.now())
+      ev.due = false; ev.dueAt = undefined; ev.lastRemindAt = undefined
+      saveCal()
+      return `done ${args.id} → kỳ kế ${new Date(ev.nextAt).toTimeString().slice(0, 5)}`
     },
   }),
 
   cal_del: tool({
-    description: "Xóa sự kiện lịch cá nhân.",
+    description: "Bỏ HẲN sự kiện lịch cá nhân (dừng vĩnh viễn, cả 1-lần lẫn lặp).",
     args: { id: tool.schema.string() },
     async execute(args: any) {
-      if (calendar.delete(args.id)) { save(); return `-${args.id}` }
+      if (calendar.delete(args.id)) { saveCal(); return `-${args.id}` }
       return "(không tìm thấy)"
     },
   }),
@@ -480,14 +575,20 @@ function ensureRunning(): boolean {
 
 export const AgentTeamworkScheduler = async ({ client }: any) => {
   _client = client
-  // load() thật sự chạy trong event hook khi đã biết sessionID (xem bên dưới).
+  // loadCal()/loadTasks() thật sự chạy trong event hook khi đã biết sessionID.
   ;(globalThis as any).__atwScheduler = {
     onWorkerEvent: (name: string, type: string, p: any) => { if (ensureRunning()) push("!ev scheduler ready"); onWorkerEvent(name, type, p) },
-    onManagerAction: (name: string, kind: string) => { if (ensureRunning()) push("!ev scheduler ready"); onManagerAction(name, kind) },
+    onManagerAction: (name: string, kind: string, detail?: string) => { if (ensureRunning()) push("!ev scheduler ready"); onManagerAction(name, kind, detail) },
   }
+
+  // Cờ tắt sạch: thoát CHỦ ĐỘNG → xóa file sổ giao việc → phiên sau KHÔNG nhắc.
+  // dispose() lo trường hợp opencode tắt plugin đúng cách; "exit" là lưới đỡ khi
+  // process kết thúc bình thường. CRASH thật không chạy được đây → file còn lại.
+  process.on("exit", () => { try { clearTasksFile() } catch {} })
 
   return {
     async dispose() {
+      clearTasksFile()
       stopClock()
       ;(globalThis as any).__atwScheduler = undefined
     },
@@ -498,9 +599,11 @@ export const AgentTeamworkScheduler = async ({ client }: any) => {
         || event?.properties?.info?.id
       if (sid && typeof sid === "string" && sid.startsWith("ses_") && sid !== _lastSessionID) {
         _lastSessionID = sid
-        // Đổi/khởi động session → nạp lịch riêng của session này (rỗng nếu chưa có).
+        // Đổi/khởi động session → nạp lịch riêng (rỗng nếu chưa có) + kiểm tra sổ
+        // giao việc còn sót (= phiên trước crash → nhắc !ev resume rồi xóa).
         // Có lịch cũ nghĩa là session từng là Manager → tự resume clock để nhắc tiếp.
-        load()
+        loadCal()
+        loadTasks()
         if (calendar.size > 0) ensureRunning()
       }
     },

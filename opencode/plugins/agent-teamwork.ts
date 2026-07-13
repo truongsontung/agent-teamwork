@@ -640,7 +640,7 @@ const tools = {
     async execute(args: any) {
       const gw = workers.get(args.name)
       if (!gw) throw new Error(`worker ${args.name} không tồn tại`)
-      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "send") } catch {}
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "send", args.task) } catch {}
       await gw.sendTask(args.task)
       return "+"
     },
@@ -680,6 +680,8 @@ const tools = {
       if (!gw) return "-"
       await gw.kill()
       workers.delete(args.name)
+      // Manager chủ động "đóng sổ" worker này → gỡ khỏi sổ giao việc.
+      try { (globalThis as any).__atwScheduler?.onManagerAction(args.name, "kill") } catch {}
       return `-${args.name}`
     },
   }),
@@ -693,6 +695,8 @@ const tools = {
       workers.clear()
       starting.clear()
       await Promise.allSettled(active.map(gw => gw.kill()))
+      // Đóng sổ toàn bộ.
+      try { (globalThis as any).__atwScheduler?.onManagerAction("*", "killall") } catch {}
       return String(n)
     },
   }),
