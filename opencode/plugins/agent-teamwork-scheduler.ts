@@ -464,7 +464,7 @@ function reconcile(now: number): number {
 // ── Tools cho Manager ─────────────────────────────────────────────────────
 const tools = {
   task_list: tool({
-    description: "Xem bảng tiến độ dự án: trạng thái task/permission/ask của mọi worker + lịch cá nhân.",
+    description: "Show progress board: task/permission/ask per worker + calendar.",
     args: {},
     async execute() {
       const lines: string[] = ["== TIẾN ĐỘ DỰ ÁN =="]
@@ -495,7 +495,7 @@ const tools = {
   }),
 
   task_deadline: tool({
-    description: "Đặt deadline (phút) cho task mới nhất của worker. Quá hạn chưa xong → !ev X overdue.",
+    description: "Set deadline (min) on worker latest task; overdue -> !ev X overdue.",
     args: { name: tool.schema.string(), minutes: tool.schema.string() },
     async execute(args: any) {
       const it = latestPendingTask(args.name)
@@ -508,7 +508,7 @@ const tools = {
   }),
 
   cal_add: tool({
-    description: 'Thêm lịch cá nhân. VD: cal_add "daily report" daily 09:00 | cal_add "standup" mon 09:00 | cal_add "check" in 30m | cal_add "sync" 14:30 | cal_add "poll" every 90m (lặp mỗi N phút, chu kỳ bất kỳ: 1.5h=every 90m)',
+    description: 'Add calendar event. when: HH:MM | in <N>m|h | daily HH:MM | <dow> HH:MM | every <N>m|h (any interval, 1.5h=90m).',
     args: { label: tool.schema.string(), when: tool.schema.string() },
     async execute(args: any) {
       if (ensureRunning()) push("!ev scheduler ready")
@@ -522,7 +522,7 @@ const tools = {
   }),
 
   cal_list: tool({
-    description: "Xem lịch cá nhân (kèm trạng thái: ⏰ sắp tới / 🔔 chờ xác nhận).",
+    description: "List calendar (status: upcoming / awaiting-confirm).",
     args: {},
     async execute() {
       if (calendar.size === 0) return "(trống)"
@@ -537,7 +537,7 @@ const tools = {
   }),
 
   cal_done: tool({
-    description: "Xác nhận ĐÃ LÀM XONG sự kiện lịch (kỳ này) khi nhận !ev cal due. Lịch 1-lần → xóa hẳn. Lịch lặp (daily/weekly) → dời sang kỳ kế & ngừng nhắc tới kỳ đó.",
+    description: "Confirm event done (this occurrence), on !ev cal due. One-time->deleted; repeat->next occurrence.",
     args: { id: tool.schema.string() },
     async execute(args: any) {
       const ev = calendar.get(args.id)
@@ -555,7 +555,7 @@ const tools = {
   }),
 
   cal_del: tool({
-    description: "Bỏ HẲN sự kiện lịch cá nhân (dừng vĩnh viễn, cả 1-lần lẫn lặp).",
+    description: "Delete calendar event permanently.",
     args: { id: tool.schema.string() },
     async execute(args: any) {
       if (calendar.delete(args.id)) { saveCal(); return `-${args.id}` }
@@ -564,7 +564,7 @@ const tools = {
   }),
 
   scheduler_start: tool({
-    description: "Khởi động bộ nhắc việc (nếu chưa chạy). Lần đầu → !ev scheduler ready. Đã chạy → 'scheduler running'.",
+    description: "Start reminder clock if not running.",
     args: {},
     async execute() {
       const started = ensureRunning()
@@ -574,7 +574,7 @@ const tools = {
   }),
 
   scheduler_verbose: tool({
-    description: "Bật/tắt log chi tiết mỗi phút (dùng khi cần debug, tắt khi ổn định). Trả về trạng thái hiện tại.",
+    description: "Toggle per-minute debug log [on|off].",
     args: { on: tool.schema.string().optional() },
     async execute(args: any) {
       if (args.on === "on" || args.on === "1" || args.on === "true") verbose = true

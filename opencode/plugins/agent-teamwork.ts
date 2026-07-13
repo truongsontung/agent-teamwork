@@ -576,7 +576,7 @@ function nextPort(): number {
 
 const tools = {
   worker_create: tool({
-    description: "Tạo worker. agent: build (mặc định)|plan.",
+    description: "Create worker. agent: build (default)|plan.",
     args: {
       name: tool.schema.string(),
       model: tool.schema.string().optional(),
@@ -635,7 +635,7 @@ const tools = {
   }),
 
   worker_send: tool({
-    description: "Gửi task (non-blocking).",
+    description: "Send task to worker (non-blocking).",
     args: { name: tool.schema.string(), task: tool.schema.string() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -647,7 +647,7 @@ const tools = {
   }),
 
   worker_result: tool({
-    description: "Đọc kết quả.",
+    description: "Read worker result (only after !ev done).",
     args: { name: tool.schema.string() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -661,7 +661,7 @@ const tools = {
   }),
 
   worker_allow: tool({
-    description: "Duyệt permission. response: once|always|never|<index>|<value>",
+    description: "Approve permission. response: once|always|never|<index>|<value>",
     args: { name: tool.schema.string(), response: tool.schema.string().optional() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -673,7 +673,7 @@ const tools = {
   }),
 
   worker_kill: tool({
-    description: "Hủy worker.",
+    description: "Kill worker (closes its ledger).",
     args: { name: tool.schema.string() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -687,7 +687,7 @@ const tools = {
   }),
 
   worker_killall: tool({
-    description: "Hủy tất cả.",
+    description: "Kill all workers.",
     args: {},
     async execute() {
       const active = [...workers.values()]
@@ -702,7 +702,7 @@ const tools = {
   }),
 
   worker_choose: tool({
-    description: "Trả lời question của worker (tick chọn). response: <label> hoặc <index> hoặc '1,3' cho multiple. Được gọi sau !ev X ask.",
+    description: "Answer worker question. response: <label>|<index>|'1,3' (multi). After !ev X ask.",
     args: { name: tool.schema.string(), response: tool.schema.string().optional() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -714,7 +714,7 @@ const tools = {
   }),
 
   worker_reject: tool({
-    description: "Từ chối question của worker (hủy yêu cầu chọn). Được gọi sau !ev X ask.",
+    description: "Reject worker question. After !ev X ask.",
     args: { name: tool.schema.string() },
     async execute(args: any) {
       const gw = workers.get(args.name)
@@ -726,7 +726,7 @@ const tools = {
   }),
 
   worker_set_model: tool({
-    description: "Cập nhật model trong worker.json.",
+    description: "Set default worker model (worker.json).",
     args: { model: tool.schema.string() },
     async execute(args: any) {
       const fs = require("fs")
@@ -743,7 +743,7 @@ const tools = {
   }),
 
   worker_get_model: tool({
-    description: "Xem model của worker (hoặc default từ worker.json nếu không truyền name).",
+    description: "Get worker model (or default).",
     args: { name: tool.schema.string().optional() },
     async execute(args: any) {
       if (args.name) {
