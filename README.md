@@ -184,6 +184,7 @@ Các dạng `<when>`: `HH:MM` (1-lần) · `in <N>m|h` (1-lần sau N) · `daily
 | `task_list` | Xem bảng tiến độ (task/permission/ask + lịch) |
 | `task_deadline <tên> <phút>` | Đặt deadline → quá hạn chưa xong báo `overdue` |
 | `cal_add / cal_list / cal_done / cal_del` | Lịch cá nhân |
+| `doc_read <path\|glob>` | Đọc **đúng 1 tài liệu** cho Manager (vd `~/kich_ban/01*`); khớp nhiều file → trả danh sách để chọn |
 | `scheduler_start` | Bật thủ công bộ nhắc (thường tự bật khi Manager dùng worker/thêm lịch) |
 | `scheduler_verbose <on\|off>` | Bật/tắt log chi tiết mỗi phút (mặc định off, reset khi restart) |
 

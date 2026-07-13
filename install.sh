@@ -24,7 +24,7 @@ if os.path.exists(cfg):
 c.setdefault('\$schema', 'https://opencode.ai/config.json')
 if c.get('plugin') == []: del c['plugin']
 perm = c.get('permission') or {}
-for p in ('worker_*', 'cal_*', 'task_*', 'scheduler_*'):
+for p in ('worker_*', 'cal_*', 'task_*', 'scheduler_*', 'doc_*'):
     perm[p] = 'deny'
 c['permission'] = perm
 with open(cfg, 'w') as f: json.dump(c, f, indent=2)
@@ -73,6 +73,7 @@ permission:
   "cal_*": allow
   "task_*": allow
   "scheduler_*": allow
+  "doc_*": allow
 ---
 
 $mgr_prompt

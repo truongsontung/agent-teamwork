@@ -761,6 +761,40 @@ const tools = {
       return `default: ${cfg.model} (max_workers: ${cfg.max_workers})`
     },
   }),
+
+  doc_read: tool({
+    description: "Read ONE document by path or glob (e.g. ~/kich_ban/01* or /abs/file.md). Must match exactly one file; if several match, returns the list to pick from.",
+    args: { path: tool.schema.string() },
+    async execute(args: any) {
+      const fs = require("fs"), os = require("os"), path = require("path")
+      let p = String(args.path || "").trim()
+      if (!p) throw new Error("thiếu path")
+      // ~ và ~/... → HOME
+      if (p === "~" || p.startsWith("~/")) p = path.join(os.homedir(), p.slice(1))
+      p = path.resolve(p)
+      let file = p
+      // Glob: chỉ hỗ trợ wildcard (* ?) ở TÊN FILE (1 cấp), đủ cho "01*".
+      if (/[*?]/.test(path.basename(p))) {
+        const dir = path.dirname(p), base = path.basename(p)
+        let entries: string[] = []
+        try { entries = fs.readdirSync(dir) } catch { return `(không mở được thư mục: ${dir})` }
+        const re = new RegExp("^" + base.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$")
+        const matches = entries.filter((e: string) => re.test(e)).sort()
+        if (matches.length === 0) return `(không có file khớp: ${base} trong ${dir})`
+        if (matches.length > 1) return `Khớp ${matches.length} file — chỉ đọc 1, hãy chỉ rõ:\n` + matches.map((m: string) => "  " + path.join(dir, m)).join("\n")
+        file = path.join(dir, matches[0])
+      }
+      let st: any
+      try { st = fs.statSync(file) } catch { return `(không tìm thấy: ${file})` }
+      if (st.isDirectory()) return `(đây là thư mục, cần chỉ 1 file): ${file}`
+      const MAX = 100 * 1024
+      let content = ""
+      try { content = fs.readFileSync(file, "utf8") } catch (e: any) { return `(không đọc được: ${e?.message || e})` }
+      const truncated = content.length > MAX
+      if (truncated) content = content.slice(0, MAX)
+      return `# ${file} (${st.size} bytes${truncated ? ", cắt bớt còn 100KB" : ""})\n\n${content}`
+    },
+  }),
 }
 
 export const AgentTeamwork = async ({ client }: any) => {
