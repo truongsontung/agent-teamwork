@@ -11,14 +11,23 @@ echo "Installing Agent Teamwork to $OPENDIR ..."
 mkdir -p "$OPENDIR/plugins" "$OPENDIR/agents"
 rm -f "$OPENDIR/plugins/agent-teamwork.js"  # remove old JS version
 
-# Ensure plugin auto-loading is not blocked by empty plugin array
+# Ensure plugin auto-loading + hide teamwork tools from non-manager agents.
+# Global-deny the teamwork tool patterns (applies to build/plan/etc.); the
+# manager agent re-allows them below → clean separation. opencode hides any
+# tool whose last-matching permission is pattern:"*" action:"deny".
 python3 -c "
 import json, os
 cfg = '$OPENDIR/opencode.json'
+c = {}
 if os.path.exists(cfg):
     with open(cfg) as f: c = json.load(f)
-    if c.get('plugin') == []: del c['plugin']
-    with open(cfg, 'w') as f: json.dump(c, f, indent=2)
+c.setdefault('\$schema', 'https://opencode.ai/config.json')
+if c.get('plugin') == []: del c['plugin']
+perm = c.get('permission') or {}
+for p in ('worker_*', 'cal_*', 'task_*', 'scheduler_*'):
+    perm[p] = 'deny'
+c['permission'] = perm
+with open(cfg, 'w') as f: json.dump(c, f, indent=2)
 " 2>/dev/null || true
 
 # ── Plugin ───────────────────────────────────────────────
@@ -60,6 +69,10 @@ permission:
   websearch: deny
   question: deny
   bash: deny
+  "worker_*": allow
+  "cal_*": allow
+  "task_*": allow
+  "scheduler_*": allow
 ---
 
 $mgr_prompt

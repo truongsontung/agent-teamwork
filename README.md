@@ -203,6 +203,15 @@ Dữ liệu lưu theo từng session tại `~/.local/share/agent-teamwork/schedu
 
 Lý do sổ giao việc tối giản: worker là process riêng, **crash là mất sạch dữ liệu** → chỉ cần nhớ "đã giao việc gì cho ai" để giao lại, không khôi phục kết quả chi tiết. Worker **died** (kể cả bị cleanup kill khi Ctrl+C) **không** tự gỡ khỏi sổ — chỉ `worker_kill/killall` do Manager chủ động mới đóng sổ.
 
+### Tách tool: chỉ Manager thấy tool teamwork
+
+Plugin đăng ký tool ở phạm vi **toàn cục** → mặc định mọi agent (`build`, `plan`, …) đều thấy `worker_*`/`cal_*`/`task_*`/`scheduler_*`. Để tách biệt, `install.sh` dùng cơ chế permission của opencode:
+
+- **opencode.json** (global): `permission` deny các mẫu `worker_*`, `cal_*`, `task_*`, `scheduler_*` → **ẩn khỏi mọi agent** (opencode loại tool có permission khớp cuối cùng là `pattern:"*" action:"deny"` khỏi danh sách gửi cho model, nên `build` **không thấy** luôn).
+- **manager.md** (agent frontmatter): `permission` **allow** lại các mẫu đó. Vì permission riêng của agent được ghép **sau cùng** (thắng theo "findLast"), Manager thấy đầy đủ tool teamwork, còn các agent khác thì không.
+
+Kết quả: `build`/`plan` chỉ thấy tool code thường; Manager chỉ thấy tool điều phối (đã deny sẵn read/edit/write/bash…).
+
 ## Cấu hình
 
 | File | Chức năng |
