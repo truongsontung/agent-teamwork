@@ -147,7 +147,10 @@ async function push(msg: string) {
       // và kẹt input khi manager đang thinking.
       await _client.session.promptAsync({
         path: { id: sid },
-        body: { parts: [{ type: "text", text: msg }] },
+        // agent: "manager" là BẮT BUỘC — nếu bỏ, opencode dùng agent mặc định
+        // (build) cho message bơm vào → session bị chuyển sang build (có
+        // bash/read/write), phá vỡ cách ly tool của Manager.
+        body: { agent: "manager", parts: [{ type: "text", text: msg }] },
       })
     })
     .catch(() => {})
