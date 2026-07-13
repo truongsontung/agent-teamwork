@@ -156,11 +156,15 @@ function parseWhen(when: string, now: number): CalEvent {
   let i = 0
   if (tokens[i] === "daily") { repeat = "daily"; i++ }
   else if (tokens[i] === "weekly") { repeat = "weekly"; i++ }
-  const rel = tokens[i]?.match(/^in\s+(\d+)(m|h)$/i)
-  if (rel) {
-    const n = parseInt(rel[1])
-    const ms = rel[2].toLowerCase() === "h" ? n * 3600000 : n * 60000
-    return { id: "", label: "", nextAt: now + ms, repeat: "none", hour: 0, minute: 0 }
+  // "in <N>m" | "in <N>h"  (đã split thành 2 token: ["in","30m"])
+  if (tokens[i]?.toLowerCase() === "in") {
+    const rel = tokens[i + 1]?.match(/^(\d+)(m|h)$/i)
+    if (rel) {
+      const n = parseInt(rel[1])
+      const ms = rel[2].toLowerCase() === "h" ? n * 3600000 : n * 60000
+      return { id: "", label: "", nextAt: now + ms, repeat: "none", hour: 0, minute: 0 }
+    }
+    throw new Error("định dạng thời gian không hợp lệ. VD: 14:30 | daily 09:00 | mon 09:00 | in 30m")
   }
   let dow: number | undefined
   if (DAY_MAP[tokens[i]?.toLowerCase()] !== undefined) {
