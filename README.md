@@ -4,12 +4,22 @@ Cài 1 lần — dùng mọi project. Bấm **Tab** để chuyển sang Manager,
 
 ## Cài đặt
 
+### Cách 1 — từ npm (nhanh nhất)
+
+```bash
+npx agent-teamwork
+```
+
+Yêu cầu: đã cài `opencode`, và có sẵn `jq` + `python3` (installer dùng để ghi config).
+
+### Cách 2 — từ source
+
 ```bash
 git clone https://github.com/truongsontung/agent-teamwork.git ~/agent-teamwork
 ~/agent-teamwork/install.sh
 ```
 
-Script sẽ cài vào `~/.config/opencode/`:
+Cả hai cách đều cài vào `~/.config/opencode/`:
 - `plugins/agent-teamwork.ts` — plugin chính (bridge điều phối worker)
 - `plugins/agent-teamwork-scheduler.ts` — plugin nhắc việc + lịch cá nhân
 - `agents/manager.md` — Manager agent definition
@@ -275,6 +285,10 @@ Worker đã tạo **không cần kill** sau khi xong. Gửi task mới bằng `w
 ## Cập nhật
 
 ```bash
+# từ npm
+npx agent-teamwork@latest
+
+# hoặc từ source
 cd ~/agent-teamwork && git pull && ./install.sh
 ```
 
