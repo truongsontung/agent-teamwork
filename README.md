@@ -181,7 +181,15 @@ cal_list / cal_del <id>
 | `scheduler_start` | Bật thủ công bộ nhắc (thường tự bật khi Manager dùng worker/thêm lịch) |
 | `scheduler_verbose <on\|off>` | Bật/tắt log chi tiết mỗi phút (mặc định off, reset khi restart) |
 
-Trạng thái (bảng tiến độ + lịch) hiện tại **scoped trong phiên làm việc hiện tại**, không persist — phù hợp một manager đơn phiên. Nâng cấp sau: lịch chia sẻ đa-manager / đa-phiên (shared calendar) để các phiên đọc qua lại và tiếp nối phiên trước.
+### Lưu lịch theo session (persist)
+
+**Lịch cá nhân được lưu theo từng session** tại `~/.local/share/agent-teamwork/scheduler/<sessionID>.json`. Khi mở lại đúng session (restart opencode), lịch tự nạp lại và **bộ nhắc chạy tiếp** — không cần thao tác gì:
+
+- Lịch **lặp** (`daily`/`weekly`) quá hạn trong lúc đóng app → tự dời tới lần kế tiếp trong tương lai.
+- Lịch **1 lần** đã qua giờ → báo "đã lỡ" ngay lần quét đầu sau khi mở lại.
+- Mỗi session có file riêng → không lẫn lịch giữa các session.
+
+**Không lưu** bảng tiến độ task worker: worker là process riêng, chết khi opencode đóng → khôi phục sẽ là dữ liệu chết, gây nhắc sai. Bảng tiến độ vẫn scoped trong phiên hiện tại.
 
 ## Cấu hình
 
@@ -254,6 +262,7 @@ cd ~/agent-teamwork && git pull && ./install.sh
 rm ~/.config/opencode/plugins/agent-teamwork.ts
 rm ~/.config/opencode/plugins/agent-teamwork-scheduler.ts
 rm ~/.config/opencode/agents/manager.md
+rm -rf ~/.local/share/agent-teamwork    # xóa lịch đã lưu theo session
 ```
 
 ## License

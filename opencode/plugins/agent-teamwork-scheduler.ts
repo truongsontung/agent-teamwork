@@ -20,11 +20,41 @@ const REMIND_INTERVAL_MS = 5 * 60 * 1000        // throttle nhắc thường
 const UNCONSUMED_INTERVAL_MS = 2 * 60 * 1000     // unconsumed ưu tiên cao
 const BATCH_WINDOW_MS = 60 * 1000                // cửa sổ gộp: nhắc luôn các mục đến lịch trong 1 phút tới
 
-// LƯU Ý: hiện tại mọi state (bảng tiến độ + lịch) SCOPED TRONG PHIÊN làm việc,
-// KHÔNG persist. Nâng cấp sau: lịch chia sẻ đa-manager / đa-phiên (multi-manager
-// shared calendar) để các phiên đọc qua lại & tiếp nối phiên trước.
-function save() {}
-function load() {}
+// ── Persist lịch cá nhân THEO SESSION ────────────────────────────────────
+// Chỉ lưu CALENDAR (lịch/bộ nhắc). Task worker KHÔNG lưu vì worker process
+// chết khi opencode đóng → khôi phục sẽ là dữ liệu chết, gây nhắc sai.
+// Mục tiêu: mở lại đúng session → lịch & bộ nhắc tự chạy tiếp.
+const STATE_DIR = `${process.env.HOME}/.local/share/agent-teamwork/scheduler`
+
+function stateFile(): string | undefined {
+  return _lastSessionID ? `${STATE_DIR}/${_lastSessionID}.json` : undefined
+}
+function save() {
+  const f = stateFile()
+  if (!f) return
+  try {
+    const fs = require("fs")
+    fs.mkdirSync(STATE_DIR, { recursive: true })
+    fs.writeFileSync(f, JSON.stringify({ calSeq, calendar: [...calendar.values()] }))
+  } catch {}
+}
+function load() {
+  const f = stateFile()
+  if (!f) return
+  try {
+    const fs = require("fs")
+    const data = JSON.parse(fs.readFileSync(f, "utf8"))
+    const now = Date.now()
+    calendar.clear()
+    for (const ev of (data.calendar || [])) {
+      // Lịch lặp quá hạn (đóng app lâu) → dời tới lần kế tiếp trong tương lai.
+      // Lịch 1 lần đã qua → giữ nguyên để tick báo "đã lỡ" ngay lần quét đầu.
+      if (ev.repeat !== "none" && ev.nextAt <= now) ev.nextAt = nextOccurrence(ev, now)
+      calendar.set(ev.id, ev)
+    }
+    if (typeof data.calSeq === "number" && data.calSeq > calSeq) calSeq = data.calSeq
+  } catch {}
+}
 
 
 type ItemKind = "task" | "permission" | "ask"
@@ -450,7 +480,7 @@ function ensureRunning(): boolean {
 
 export const AgentTeamworkScheduler = async ({ client }: any) => {
   _client = client
-  load()
+  // load() thật sự chạy trong event hook khi đã biết sessionID (xem bên dưới).
   ;(globalThis as any).__atwScheduler = {
     onWorkerEvent: (name: string, type: string, p: any) => { if (ensureRunning()) push("!ev scheduler ready"); onWorkerEvent(name, type, p) },
     onManagerAction: (name: string, kind: string) => { if (ensureRunning()) push("!ev scheduler ready"); onManagerAction(name, kind) },
@@ -466,7 +496,13 @@ export const AgentTeamworkScheduler = async ({ client }: any) => {
       const sid = event?.properties?.sessionID
         || event?.properties?.info?.sessionID
         || event?.properties?.info?.id
-      if (sid && typeof sid === "string" && sid.startsWith("ses_")) _lastSessionID = sid
+      if (sid && typeof sid === "string" && sid.startsWith("ses_") && sid !== _lastSessionID) {
+        _lastSessionID = sid
+        // Đổi/khởi động session → nạp lịch riêng của session này (rỗng nếu chưa có).
+        // Có lịch cũ nghĩa là session từng là Manager → tự resume clock để nhắc tiếp.
+        load()
+        if (calendar.size > 0) ensureRunning()
+      }
     },
     tool: tools,
   }
