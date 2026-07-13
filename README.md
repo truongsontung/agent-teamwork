@@ -130,6 +130,8 @@ Trường hợp SSE `complete` event đến **trước** provider error (race co
 
 Plugin riêng `agent-teamwork-scheduler.ts` (cùng codebase, deploy qua `install.sh`) cung cấp 2 mục:
 
+**Thời điểm hoạt động:** bộ nhắc CHỈ chạy trong phiên Manager. Nó **tự khởi động** ngay khi Manager bắt đầu dùng worker (tạo/gửi task) hoặc thêm lịch cá nhân, và cũng có thể bật thủ công bằng `scheduler_start`. Clock **không** chạy lúc mở opencode → không bơm `!ev` vào các session không phải Manager.
+
 ### 1. Bảng tiến độ dự án (Watchdog — đối chứng Worker × Manager)
 Theo dõi mọi tương tác worker↔manager qua **4 trạng thái task** kết hợp 2 trục độc lập:
 
@@ -144,9 +146,7 @@ Cộng thêm `permission_wait` / `ask_wait` khi worker chờ manager duyệt quy
 - W (worker) lấy **tự động** từ Gateway SSE qua bridge (không phụ thuộc manager nhớ báo) → giải quyết triệt để "worker xong mà manager quên đọc".
 - M (manager) lấy từ hành động thật (`worker_result` / `worker_allow` / `worker_choose` / `worker_reject`).
 
-Mỗi phút plugin bơm `!ev tick HH:MM pending=P unconsumed=U wait=W cal=C` để manager nắm tổng quan.
-
-**Nhắc việc thông minh (smart batch):** để tránh spam khi nhiều worker cùng cần nhắc, các hành động **quên** (`unconsumed` / `overdue` / `permission_wait` / `ask_wait` / `cal due`) được **gộp chung 1 lần / phút** thành `!ev remind N: <mục1> | <mục2> | ...` (mỗi mục: `<tên> <loại> <thời_gian>` hoặc `cal <id> <label>`). Riêng hành động **sai** (`stale` — đọc result trước khi worker xong) được **nhắc ngay, riêng biệt**, không gộp — vì cần xử lý khẩn cấp.
+**Nhắc việc thông minh (smart batch):** bộ nhắc **quét mỗi phút** nhưng **chỉ bơm `!ev remind` khi có mục thực sự đến lịch** — nếu quét qua không có gì đến lịch thì không báo gì. Khi 1 mục đến lịch, các hành động **quên** (`unconsumed` / `overdue` / `permission_wait` / `ask_wait` / `cal due`) và các mục **sắp đến trong 1 phút tới** được **gộp chung 1 lần** thành `!ev remind N: <mục1> | <mục2> | ...` (mỗi mục: `<tên> <loại> <thời_gian>` hoặc `cal <id> <label>`). Riêng hành động **sai** (`stale` — đọc result trước khi worker xong) được **nhắc ngay, riêng biệt**, không gộp — vì cần xử lý khẩn cấp.
 
 ### 2. Lịch làm việc cá nhân (Calendar)
 Manager tự lên lịch và đến giờ được nhắc (chỉ nhắc, không tự động gửi task):

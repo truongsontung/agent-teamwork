@@ -230,6 +230,7 @@ class WorkerGateway {
       this.done = true
       await this.fetchAndCacheResult()
       await this.push(`!ev ${this.name} done`)
+      try { (globalThis as any).__atwScheduler?.onWorkerEvent(this.name, "done", {}) } catch {}
       return
     }
 
@@ -242,6 +243,7 @@ class WorkerGateway {
       this.done = true
       await this.fetchAndCacheResult()
       await this.push(`!ev ${this.name} error [${cls}] ${em}`)
+      try { (globalThis as any).__atwScheduler?.onWorkerEvent(this.name, "error", {}) } catch {}
       return
     }
 

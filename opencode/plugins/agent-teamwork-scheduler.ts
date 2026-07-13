@@ -17,6 +17,7 @@ let _client: any = null
 
 const REMIND_INTERVAL_MS = 5 * 60 * 1000        // throttle nhắc thường
 const UNCONSUMED_INTERVAL_MS = 2 * 60 * 1000     // unconsumed ưu tiên cao
+const BATCH_WINDOW_MS = 60 * 1000                // cửa sổ gộp: nhắc luôn các mục đến lịch trong 1 phút tới
 
 // LƯU Ý: hiện tại mọi state (bảng tiến độ + lịch) SCOPED TRONG PHIÊN làm việc,
 // KHÔNG persist. Nâng cấp sau: lịch chia sẻ đa-manager / đa-phiên (multi-manager
@@ -46,6 +47,7 @@ interface CalEvent {
   hour: number
   minute: number
   dow?: number
+  lastRemindAt?: number
 }
 
 const interactions = new Map<string, Item>()
@@ -54,6 +56,7 @@ let seq = 0
 let calSeq = 0
 let clockTimer: any = null
 let pendingBatch: string[] = []   // gom các nhắc "quên" trong 1 tick → 1 lần push
+let verbose = false               // bật/tắt log chi tiết mỗi phút
 
 let pushQueue: Promise<void> = Promise.resolve()
 async function push(msg: string) {
@@ -189,54 +192,109 @@ function nextOccurrence(ev: CalEvent, now: number): number {
 // ── Clock loop (mỗi phút) ─────────────────────────────────────────────────
 function startClock() {
   if (clockTimer) return
-  clockTimer = setInterval(() => void tick(), 60_000)
+  scheduleNext()
+}
+function scheduleNext() {
+  clockTimer = setTimeout(async () => {
+    await tick()
+    scheduleNext()
+  }, 60_000)
 }
 function stopClock() {
-  if (clockTimer) { clearInterval(clockTimer); clockTimer = null }
+  if (clockTimer) { clearTimeout(clockTimer); clockTimer = null }
 }
 
 async function tick() {
   const now = Date.now()
   pendingBatch = []
+  const nearCal: CalEvent[] = []
+  let trulyDue = 0
 
-  // 1) Lịch cá nhân đến giờ → gộp vào batch (quên việc cá nhân)
+  // 1) Lịch cá nhân: chia "đã đến giờ" (due) và "sắp đến trong 1 phút" (near)
   for (const [id, ev] of calendar) {
     if (now >= ev.nextAt) {
       pendingBatch.push(`cal ${id} ${ev.label}`)
+      trulyDue++
       if (ev.repeat === "none") calendar.delete(id)
-      else ev.nextAt = nextOccurrence(ev, now)
+      else { ev.nextAt = nextOccurrence(ev, now); ev.lastRemindAt = now }
+    } else if (ev.nextAt <= now + BATCH_WINDOW_MS) {
+      nearCal.push(ev)
     }
   }
 
-  // 2) Đối chiếu & thu thập nhắc
-  //    - STALE (hành động SAI) → push NGAY, không gộp
-  //    - còn lại (quên) → gộp vào pendingBatch, đẩy 1 lần ở dưới
-  reconcile(now)
+  // 2) Đối chiếu worker/manager: trả về số mục "đã đến lúc nhắc" (truly due).
+  //    - STALE (hành động SAI) → push NGAY, KHÔNG tính vào trulyDue, KHÔNG gộp.
+  //    - còn lại (quên) → gộp vào pendingBatch.
+  trulyDue += reconcile(now)
 
-  // 3) Gộp chung 1 lần nhắc cho các hành động "quên" (nhiều worker / gần nhau)
+  // 3) Nếu có ít nhất 1 mục thực sự đến lịch → GỘP LUÔN các mục sắp đến (<=1 phút)
+  if (trulyDue > 0) {
+    for (const ev of nearCal) {
+      if (ev.lastRemindAt && now - ev.lastRemindAt < REMIND_INTERVAL_MS) continue
+      pendingBatch.push(`cal ${ev.id} ${ev.label} (~${Math.max(1, Math.round((ev.nextAt - now) / 1000))}s)`)
+      ev.lastRemindAt = now
+    }
+  }
+
+  // 4) Chỉ bơm 1 lần nhắc khi có mục đến lịch. Không có gì → KHÔNG báo gì.
   if (pendingBatch.length) {
     await push(`!ev remind ${pendingBatch.length}: ` + pendingBatch.join(" | "))
   }
-
-  // 4) Tóm tắt mỗi phút
-  let P = 0, U = 0, Wc = 0
-  for (const it of interactions.values()) {
-    if (it.kind === "task") {
-      if (!it.wDone) P++
-      else if (!it.mActed) U++
-    } else if (it.wDone && !it.mActed) Wc++
-  }
-  const hh = new Date(now).toTimeString().slice(0, 5)
-  await push(`!ev tick ${hh} pending=${P} unconsumed=${U} wait=${Wc} cal=${calendar.size}`)
 
   // 5) Quét dọn task đã hoàn tất (W & M đều xong > 1 phút)
   for (const [id, it] of interactions) {
     if (it.kind === "task" && it.wDone && it.mActed && it.mAt && now - it.mAt > 60000) interactions.delete(id)
   }
+
+  // 6) Verbose log: bắn toàn bộ trạng thái mỗi phút để debug
+  if (verbose) {
+    const ts = new Date(now).toTimeString().slice(0, 8)
+    const lines: string[] = [`[tick ${ts}]`]
+
+    // interactions
+    if (interactions.size === 0) {
+      lines.push("  tasks: (empty)")
+    } else {
+      for (const it of interactions.values()) {
+        let state = ""
+        if (it.kind === "task") {
+          if (it.wDone && it.mActed) state = "COMPLETED"
+          else if (it.wDone && !it.mActed) state = "UNCONSUMED"
+          else if (!it.wDone && it.mActed) state = "STALE"
+          else state = "PENDING"
+          if (it.deadline) state += ` dl=${new Date(it.deadline).toTimeString().slice(0, 5)}`
+        } else {
+          state = it.mActed ? "DONE" : "WAIT"
+        }
+        const age = Math.round((now - it.createdAt) / 1000)
+        lines.push(`  ${it.id} [${it.kind}] ${state} age=${age}s`)
+      }
+    }
+
+    // calendar
+    if (calendar.size === 0) {
+      lines.push("  cal: (empty)")
+    } else {
+      for (const ev of calendar.values()) {
+        const till = Math.round((ev.nextAt - now) / 1000)
+        lines.push(`  ${ev.id} "${ev.label}" [${ev.repeat}] in=${till}s`)
+      }
+    }
+
+    // tick result
+    lines.push(`  trulyDue=${trulyDue} batch=${pendingBatch.length} sent=${pendingBatch.length > 0 ? "yes" : "no"}`)
+    if (pendingBatch.length) lines.push(`  → ${pendingBatch.join(" | ")}`)
+    if (nearCal.length) lines.push(`  nearCal: ${nearCal.map(e => e.id).join(", ")}`)
+
+    await push(lines.join("\n"))
+  }
+
   save()
 }
 
-function reconcile(now: number) {
+// Trả về số lượng mục "quên" đã đến lúc nhắc (truly due) được gộp vào pendingBatch.
+function reconcile(now: number): number {
+  let due = 0
   for (const it of interactions.values()) {
     if (it.kind === "task") {
       // 4 trạng thái task (W × M)
@@ -244,7 +302,7 @@ function reconcile(now: number) {
         // UNCONSUMED — worker xong, manager chưa đọc result → GỘP BATCH (quên)
         if (!it.lastRemindAt || now - it.lastRemindAt > UNCONSUMED_INTERVAL_MS) {
           pendingBatch.push(`${it.name} unconsumed ${Math.max(1, Math.round((now - (it.wAt || now)) / 60000))}m`)
-          it.lastRemindAt = now
+          it.lastRemindAt = now; due++
         }
       } else if (!it.wDone && it.mActed) {
         // STALE — manager đọc trước khi worker xong (luồng SAI) → NHẮC NGAY, không gộp
@@ -256,7 +314,7 @@ function reconcile(now: number) {
         // PENDING quá deadline → GỘP BATCH
         if (!it.lastRemindAt || now - it.lastRemindAt > REMIND_INTERVAL_MS) {
           pendingBatch.push(`${it.name} overdue ${Math.max(1, Math.round((now - (it.deadline || now)) / 60000))}m`)
-          it.lastRemindAt = now
+          it.lastRemindAt = now; due++
         }
       }
     } else {
@@ -265,11 +323,12 @@ function reconcile(now: number) {
         if (!it.lastRemindAt || now - it.lastRemindAt > REMIND_INTERVAL_MS) {
           const ev = it.kind === "permission" ? "permission_wait" : "ask_wait"
           pendingBatch.push(`${it.name} ${ev} ${Math.max(1, Math.round((now - (it.wAt || now)) / 60000))}m`)
-          it.lastRemindAt = now
+          it.lastRemindAt = now; due++
         }
       }
     }
   }
+  return due
 }
 
 // ── Tools cho Manager ─────────────────────────────────────────────────────
@@ -299,17 +358,6 @@ const tools = {
     },
   }),
 
-  task_ack: tool({
-    description: "Đánh dấu manager đã xử lý xong task của worker (xóa unconsumed). Gọi sau worker_result.",
-    args: { name: tool.schema.string() },
-    async execute(args: any) {
-      const it = latestTaskNotActed(args.name)
-      if (!it) return "(không có task chờ xử lý)"
-      it.mActed = true; it.mAt = Date.now()
-      return `acked ${args.name}`
-    },
-  }),
-
   task_deadline: tool({
     description: "Đặt deadline (phút) cho task mới nhất của worker. Quá hạn chưa xong → !ev X overdue.",
     args: { name: tool.schema.string(), minutes: tool.schema.string() },
@@ -327,6 +375,7 @@ const tools = {
     description: 'Thêm lịch cá nhân. VD: cal_add "daily report" daily 09:00 | cal_add "standup" mon 09:00 | cal_add "check" in 30m | cal_add "sync" 14:30',
     args: { label: tool.schema.string(), when: tool.schema.string() },
     async execute(args: any) {
+      if (ensureRunning()) push("!ev scheduler ready")
       const ev = parseWhen(args.when, Date.now())
       ev.id = `cal-${++calSeq}`
       ev.label = args.label
@@ -353,14 +402,47 @@ const tools = {
       return "(không tìm thấy)"
     },
   }),
+
+  scheduler_start: tool({
+    description: "Khởi động bộ nhắc việc (nếu chưa chạy). Lần đầu → !ev scheduler ready. Đã chạy → 'scheduler running'.",
+    args: {},
+    async execute() {
+      const started = ensureRunning()
+      if (started) push("!ev scheduler ready")
+      return clockTimer ? (started ? "scheduler ready" : "scheduler running") : "scheduler stopped"
+    },
+  }),
+
+  scheduler_verbose: tool({
+    description: "Bật/tắt log chi tiết mỗi phút (dùng khi cần debug, tắt khi ổn định). Trả về trạng thái hiện tại.",
+    args: { on: tool.schema.string().optional() },
+    async execute(args: any) {
+      if (args.on === "on" || args.on === "1" || args.on === "true") verbose = true
+      else if (args.on === "off" || args.on === "0" || args.on === "false") verbose = false
+      else verbose = !verbose
+      return `verbose ${verbose ? "ON" : "OFF"}`
+    },
+  }),
+}
+
+// Bộ nhắc KHÔNG chạy lúc mở opencode — chỉ khởi động khi Manager thực sự dùng
+// (tạo worker/gửi task/thêm lịch) hoặc khi gọi scheduler_start. Tránh bơm
+// !ev vào các session không phải Manager.
+function ensureRunning(): boolean {
+  if (!clockTimer) {
+    startClock()
+    return true   // vừa khởi động
+  }
+  return false    // đã chạy sẵn
 }
 
 export const AgentTeamworkScheduler = async ({ client }: any) => {
   _client = client
   load()
-  ;(globalThis as any).__atwScheduler = { onWorkerEvent, onManagerAction }
-  startClock()
-  await push(`!ev scheduler ready`)
+  ;(globalThis as any).__atwScheduler = {
+    onWorkerEvent: (name: string, type: string, p: any) => { if (ensureRunning()) push("!ev scheduler ready"); onWorkerEvent(name, type, p) },
+    onManagerAction: (name: string, kind: string) => { if (ensureRunning()) push("!ev scheduler ready"); onManagerAction(name, kind) },
+  }
 
   return {
     async dispose() {
