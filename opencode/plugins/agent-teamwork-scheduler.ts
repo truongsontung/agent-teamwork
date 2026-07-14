@@ -76,7 +76,22 @@ function saveTasks() {
 function clearTasksFile() {
   const f = tasksFile()
   if (!f) return
-  try { require("fs").unlinkSync(f) } catch {}
+  try {
+    require("fs").unlinkSync(f)
+    require("fs").unlinkSync(`${STATE_DIR}/${_lastSessionID}.resumed`)
+  } catch {}
+}
+// Xoá sổ giao việc + marker của MỌI session (thoát sạch → không resume lần sau).
+function clearAllTasksFiles() {
+  try {
+    const fs = require("fs")
+    const sids = new Set<string>([...schedSessions.keys()])
+    if (_lastSessionID) sids.add(_lastSessionID)
+    for (const sid of sids) {
+      try { fs.unlinkSync(`${STATE_DIR}/${sid}.tasks.json`) } catch {}
+      try { fs.unlinkSync(`${STATE_DIR}/${sid}.resumed`) } catch {}
+    }
+  } catch {}
 }
 // Nạp sổ lúc mở session. Có nội dung = phiên trước CRASH (không kịp xóa) →
 // nhắc manager việc dang dở rồi xóa file + bắt đầu sổ mới.
@@ -89,8 +104,12 @@ function loadTasks() {
     fs.unlinkSync(f)
     taskLedger = []
     if (Array.isArray(arr) && arr.length) {
-      const summary = arr.map((t: TaskLog) => `${t.worker}: ${t.task}`).join(" | ")
-      push(`!ev resume ${arr.length} việc dang dở từ phiên trước (worker đã mất khi crash, cần tạo lại worker & giao lại): ${summary}`)
+      const marker = `${STATE_DIR}/${_lastSessionID}.resumed`
+      if (!fs.existsSync(marker)) {
+        const summary = arr.map((t: TaskLog) => `${t.worker}: ${t.task}`).join(" | ")
+        push(`!ev resume ${arr.length} việc dang dở từ phiên trước (worker có thể vẫn sống — reuse nếu còn, chỉ tạo lại nếu thực sự chết): ${summary}`)
+        try { fs.writeFileSync(marker, "1") } catch {}
+      }
     }
   } catch {}
 }
@@ -126,14 +145,58 @@ interface CalEvent {
 // crash-continuity, tối giản (worker + tóm tắt task + lúc giao).
 interface TaskLog { worker: string; task: string; at: number }
 
-const interactions = new Map<string, Item>()
-const calendar = new Map<string, CalEvent>()
+let interactions = new Map<string, Item>()
+let calendar = new Map<string, CalEvent>()
 let taskLedger: TaskLog[] = []
 let seq = 0
 let calSeq = 0
 let clockTimer: any = null
 let pendingBatch: string[] = []   // gom các nhắc "quên" trong 1 tick → 1 lần push
 let verbose = false               // bật/tắt log chi tiết mỗi phút
+
+// ── Session scoping: mỗi manager session có state riêng ──
+// Tránh lẫn lộn interactions/calendar/taskLedger giữa các cuộc hội thoại.
+interface SState {
+  interactions: Map<string, Item>
+  calendar: Map<string, CalEvent>
+  taskLedger: TaskLog[]
+  seq: number
+  calSeq: number
+  pendingBatch: string[]
+  verbose: boolean
+}
+const schedSessions = new Map<string, SState>()
+let schedActiveSid: string | undefined = undefined
+
+function switchSchedSession(oldSid: string | undefined, newSid: string) {
+  if (oldSid && oldSid !== newSid) {
+    // Lưu state session cũ + dừng clock + persist file.
+    schedSessions.set(oldSid, { interactions, calendar, taskLedger, seq, calSeq, pendingBatch, verbose })
+    stopClock()
+    saveCal()
+    saveTasks()
+  }
+  const s = schedSessions.get(newSid)
+  if (s) {
+    interactions = s.interactions
+    calendar = s.calendar
+    taskLedger = s.taskLedger
+    seq = s.seq
+    calSeq = s.calSeq
+    pendingBatch = s.pendingBatch
+    verbose = s.verbose
+  } else {
+    interactions = new Map()
+    calendar = new Map()
+    taskLedger = []
+    seq = 0
+    calSeq = 0
+    pendingBatch = []
+    verbose = false
+  }
+  clockTimer = null
+  schedActiveSid = newSid
+}
 
 let pushQueue: Promise<void> = Promise.resolve()
 
@@ -610,12 +673,12 @@ export const AgentTeamworkScheduler = async ({ client }: any) => {
   // Cờ tắt sạch: thoát CHỦ ĐỘNG → xóa file sổ giao việc → phiên sau KHÔNG nhắc.
   // dispose() lo trường hợp opencode tắt plugin đúng cách; "exit" là lưới đỡ khi
   // process kết thúc bình thường. CRASH thật không chạy được đây → file còn lại.
-  process.on("exit", () => { try { clearTasksFile() } catch {} })
+  process.on("exit", () => { try { stopClock(); clearAllTasksFiles() } catch {} })
 
   return {
     async dispose() {
-      clearTasksFile()
       stopClock()
+      clearAllTasksFiles()
       ;(globalThis as any).__atwScheduler = undefined
     },
     event: async ({ event }: any) => {
@@ -623,7 +686,20 @@ export const AgentTeamworkScheduler = async ({ client }: any) => {
       const sid = event?.properties?.sessionID
         || event?.properties?.info?.sessionID
         || event?.properties?.info?.id
+      const type = event?.type
+      // Session bị xoá → xoá state session đó + file liên quan.
+      if (type === "session.deleted" && sid) {
+        schedSessions.delete(sid)
+        try {
+          const fs = require("fs")
+          fs.unlinkSync(`${STATE_DIR}/${sid}.tasks.json`)
+          fs.unlinkSync(`${STATE_DIR}/${sid}.resumed`)
+        } catch {}
+        return
+      }
       if (sid && typeof sid === "string" && sid.startsWith("ses_") && sid !== _lastSessionID) {
+        const old = _lastSessionID
+        switchSchedSession(old, sid)
         _lastSessionID = sid
         // Đổi/khởi động session → nạp lịch riêng (rỗng nếu chưa có) + kiểm tra sổ
         // giao việc còn sót (= phiên trước crash → nhắc !ev resume rồi xóa).

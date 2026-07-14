@@ -38,24 +38,68 @@ function loadWorkerConfig(): { model: string; max_workers: number } {
   }
 }
 
-const workers = new Map<string, WorkerGateway>()
-const starting = new Map<string, number>()
+let workers = new Map<string, WorkerGateway>()
+let starting = new Map<string, number>()
 let portCursor = 4091
+
+// ── Session scoping: mỗi manager session có bộ worker/port riêng ──
+// Tránh lẫn lộn state giữa các cuộc hội thoại và orphan worker khi đổi session.
+interface GwSession { workers: Map<string, WorkerGateway>; starting: Map<string, number>; portCursor: number }
+const gwSessions = new Map<string, GwSession>()
+let gwActiveSid: string | undefined = undefined
+
+function switchGwSession(oldSid: string | undefined, newSid: string) {
+  if (oldSid && oldSid !== newSid) {
+    // Lưu state session cũ. Worker TIẾP TỤC chạy (không kill khi chỉ đổi cuộc
+    // hội thoại) — chúng được quản bởi session cũ và chỉ kill khi exit/delete.
+    gwSessions.set(oldSid, { workers, starting, portCursor })
+  }
+  const saved = gwSessions.get(newSid)
+  if (saved) {
+    workers = saved.workers
+    starting = saved.starting
+    portCursor = saved.portCursor
+    // Gạt bỏ worker đã chết (nếu từng quay lại session cũ).
+    for (const [n, gw] of [...workers]) if (gw.dead) workers.delete(n)
+  } else {
+    workers = new Map()
+    starting = new Map()
+    portCursor = 4091
+  }
+  gwActiveSid = newSid
+}
+
+// Giết hết worker của 1 session cụ thể (khi session đó bị xoá).
+function killSessionWorkers(sid: string) {
+  const s = gwSessions.get(sid)
+  if (s) {
+    for (const gw of s.workers.values()) { try { gw.kill() } catch {} }
+    s.workers.clear()
+    s.starting.clear()
+  }
+  // Session đang active có thể chưa nằm trong gwSessions (trường hợp session
+  // đầu tiên chưa từng switch) → worker nằm trong map live `workers`.
+  if (sid === gwActiveSid) {
+    for (const gw of workers.values()) { try { gw.kill() } catch {} }
+    workers.clear()
+    starting.clear()
+  }
+}
 
 let pushQueue: Promise<void> = Promise.resolve()
 
 class PortInUseError extends Error {}
 
-async function pushManagerEvent(msg: string) {
+async function pushManagerEvent(msg: string, sid?: string) {
   pushQueue = pushQueue
     .then(async () => {
-      const sid = _lastSessionID
-      if (!sid || !_client?.session?.promptAsync) return
+      const target = sid || _lastSessionID
+      if (!target || !_client?.session?.promptAsync) return
       // Gửi thẳng vào session (hiện trong hội thoại + kích hoạt manager),
       // KHÔNG dùng ô input chung → tránh 2 bug: chèn vào prompt dở của user,
       // và kẹt input khi manager đang thinking.
       await _client.session.promptAsync({
-        path: { id: sid },
+        path: { id: target },
         // agent: "manager" là BẮT BUỘC — nếu bỏ, opencode dùng agent mặc định
         // (build) cho message bơm vào → session bị chuyển sang build (có
         // bash/read/write), phá vỡ cách ly tool của Manager.
@@ -73,6 +117,7 @@ class WorkerGateway {
   sessionId: string
   model: string
   agent: string
+  managerSid: string
   done = false
   dead = false
   awaitingTask = false
@@ -87,13 +132,14 @@ class WorkerGateway {
   private exitHandled = false
   private stderrMonitorAbort = new AbortController()
 
-  constructor(name: string, port: number, proc: any, sid: string, model: string, agent: string) {
+  constructor(name: string, port: number, proc: any, sid: string, model: string, agent: string, managerSid: string) {
     this.name = name; this.port = port; this.proc = proc
     this.sessionId = sid; this.model = model; this.agent = agent
+    this.managerSid = managerSid
   }
 
   private async push(msg: string) {
-    await pushManagerEvent(msg)
+    await pushManagerEvent(msg, this.managerSid)
   }
 
   private startStderrMonitor() {
@@ -619,7 +665,7 @@ const tools = {
         }
         const sid = await createSession(port, name, agent)
 
-        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent)
+        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent, gwActiveSid || _lastSessionID)
         workers.set(name, gw)
         gw.startMonitor()
         return `+${name} (port ${port})`
@@ -808,11 +854,17 @@ export const AgentTeamwork = async ({ client }: any) => {
   _client = client
 
   const cleanup = async () => {
-    const active = [...workers.values()]
-    workers.clear()
-    starting.clear()
+    // Giết TẤT CẢ worker của MỌI session (Ctrl+C / exit / dispose).
+    const all: WorkerGateway[] = []
+    for (const s of gwSessions.values()) for (const gw of s.workers.values()) all.push(gw)
+    // Session đang active có thể chưa nằm trong gwSessions → cộng thêm worker live.
+    for (const gw of workers.values()) all.push(gw)
+    gwSessions.clear()
+    workers = new Map()
+    starting = new Map()
+    portCursor = 4091
     await Promise.allSettled(
-      active.map(gw => Promise.race([
+      all.map(gw => Promise.race([
         gw.kill(),
         new Promise(r => setTimeout(r, 5000))
       ]))
@@ -836,7 +888,18 @@ export const AgentTeamwork = async ({ client }: any) => {
       const sid = event?.properties?.sessionID
         || event?.properties?.info?.sessionID
         || event?.properties?.info?.id
-      if (sid && typeof sid === "string" && sid.startsWith("ses_")) _lastSessionID = sid
+      const type = event?.type
+      // Session bị xoá → kill worker của session đó (dù có nằm trong gwSessions
+      // hay là session active chưa từng switch). Luôn return để không rơi vào
+      // logic switch ở dưới (tránh switch active session sang 1 id đã xoá).
+      if (type === "session.deleted" && sid) {
+        killSessionWorkers(sid)
+        return
+      }
+      if (sid && typeof sid === "string" && sid.startsWith("ses_") && sid !== gwActiveSid) {
+        switchGwSession(gwActiveSid, sid)
+        _lastSessionID = sid
+      }
     },
     tool: tools,
   }
