@@ -419,6 +419,12 @@ class WorkerGateway {
       ? this.model.split("/") : ["opencode", this.model]
     const modelId = rest.join("/")
     try {
+      // Đóng session cũ (nếu có) rồi tạo session MỚI cho task này → worker KHÔNG
+      // cộng dồn context task cũ, và process serve không tích luỹ session chết.
+      if (this.sessionId) {
+        await fetch(`http://127.0.0.1:${this.port}/session/${this.sessionId}`, { method: "DELETE" }).catch(() => {})
+      }
+      this.sessionId = await createSession(this.port, this.name, this.agent)
       const r = await fetch(
         `http://127.0.0.1:${this.port}/session/${this.sessionId}/prompt_async`,
         {
@@ -663,9 +669,11 @@ const tools = {
         if (agent !== "build" && agent !== "plan") {
           throw new Error(`agent không hợp lệ: ${agent}. Chỉ hỗ trợ: build, plan`)
         }
-        const sid = await createSession(port, name, agent)
 
-        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent, gwActiveSid || _lastSessionID || context?.sessionID)
+        // Session được tạo lười trong sendTask: mỗi task = 1 session MỚI → worker
+        // KHÔNG cộng dồn context task cũ. Process serve vẫn giữ nguyên (không tốn
+        // ~1-2s khởi động lại).
+        const gw = new WorkerGateway(name, port, proc, undefined, args.model || DEFAULT_MODEL, agent, gwActiveSid || _lastSessionID || context?.sessionID)
         workers.set(name, gw)
         gw.startMonitor()
         return `+${name} (port ${port})`
