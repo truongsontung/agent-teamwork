@@ -635,7 +635,7 @@ const tools = {
       model: tool.schema.string().optional(),
       agent: tool.schema.string().optional(),
     },
-    async execute(args: any) {
+    async execute(args: any, context: any) {
       const config = loadWorkerConfig()
       const DEFAULT_MODEL = config.model
       const MAX_WORKERS = config.max_workers
@@ -665,7 +665,7 @@ const tools = {
         }
         const sid = await createSession(port, name, agent)
 
-        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent, gwActiveSid || _lastSessionID)
+        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent, gwActiveSid || _lastSessionID || context?.sessionID)
         workers.set(name, gw)
         gw.startMonitor()
         return `+${name} (port ${port})`
