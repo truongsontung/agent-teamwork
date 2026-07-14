@@ -823,6 +823,30 @@ const tools = {
     },
   }),
 
+  worker_list: tool({
+    description: "List running workers with port/pid/session/owner/state — debug visibility into what is alive.",
+    args: {},
+    async execute() {
+      if (workers.size === 0) return "(không có worker nào trong session này)"
+      const lines = [...workers.values()].map((gw) => {
+        const state = gw.dead ? "DEAD"
+          : gw.done ? "done(chờ result)"
+          : gw.hasTask ? "running"
+          : gw.awaitingTask ? "starting"
+          : "idle"
+        const extra = [
+          gw.pendingPermission ? `perm=${gw.pendingPermission}` : "",
+          gw.pendingQuestion ? `ask=${gw.pendingQuestion}` : "",
+        ].filter(Boolean).join(" ")
+        return `• ${gw.name} port=${gw.port} pid=${gw.proc?.pid ?? "?"} session=${gw.sessionId?.slice(0, 18)} owner=${gw.managerSid?.slice(0, 18)} [${state}]${extra ? " " + extra : ""}`
+      })
+      let other = 0
+      for (const s of gwSessions.values()) other += s.workers.size
+      const tail = other > 0 ? `\n(${other} worker ở session khác, không hiện ở đây)` : ""
+      return lines.join("\n") + tail
+    },
+  }),
+
   doc_read: tool({
     description: "Read ONE document by path or glob (e.g. ~/kich_ban/01* or /abs/file.md). Must match exactly one file; if several match, returns the list to pick from.",
     args: { path: tool.schema.string() },
