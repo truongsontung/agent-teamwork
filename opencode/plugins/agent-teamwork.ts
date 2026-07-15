@@ -25,7 +25,6 @@ function extractErrorText(raw: any, p: any): { text: string; tag: string } {
 }
 
 let _client: any = null
-let _lastSessionID: string | undefined = undefined
 
 function loadWorkerConfig(): { model: string; max_workers: number } {
   try {
@@ -46,19 +45,12 @@ let pushQueue: Promise<void> = Promise.resolve()
 
 class PortInUseError extends Error {}
 
-async function pushManagerEvent(msg: string) {
+async function pushManagerEvent(msg: string, sid: string) {
+  if (!sid || !_client?.session?.promptAsync) return
   pushQueue = pushQueue
     .then(async () => {
-      const sid = _lastSessionID
-      if (!sid || !_client?.session?.promptAsync) return
-      // Gửi thẳng vào session (hiện trong hội thoại + kích hoạt manager),
-      // KHÔNG dùng ô input chung → tránh 2 bug: chèn vào prompt dở của user,
-      // và kẹt input khi manager đang thinking.
       await _client.session.promptAsync({
         path: { id: sid },
-        // agent: "manager" là BẮT BUỘC — nếu bỏ, opencode dùng agent mặc định
-        // (build) cho message bơm vào → session bị chuyển sang build (có
-        // bash/read/write), phá vỡ cách ly tool của Manager.
         body: { agent: "manager", parts: [{ type: "text", text: msg }] },
       })
     })
@@ -73,6 +65,7 @@ class WorkerGateway {
   sessionId: string
   model: string
   agent: string
+  managerSid: string
   done = false
   dead = false
   awaitingTask = false
@@ -87,13 +80,14 @@ class WorkerGateway {
   private exitHandled = false
   private stderrMonitorAbort = new AbortController()
 
-  constructor(name: string, port: number, proc: any, sid: string, model: string, agent: string) {
+  constructor(name: string, port: number, proc: any, sid: string, model: string, agent: string, managerSid: string) {
     this.name = name; this.port = port; this.proc = proc
     this.sessionId = sid; this.model = model; this.agent = agent
+    this.managerSid = managerSid
   }
 
   private async push(msg: string) {
-    await pushManagerEvent(msg)
+    await pushManagerEvent(msg, this.managerSid)
   }
 
   private startStderrMonitor() {
@@ -589,7 +583,7 @@ const tools = {
       model: tool.schema.string().optional(),
       agent: tool.schema.string().optional(),
     },
-    async execute(args: any) {
+    async execute(args: any, context: any) {
       const config = loadWorkerConfig()
       const DEFAULT_MODEL = config.model
       const MAX_WORKERS = config.max_workers
@@ -619,7 +613,7 @@ const tools = {
         }
         const sid = await createSession(port, name, agent)
 
-        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent)
+        const gw = new WorkerGateway(name, port, proc, sid, args.model || DEFAULT_MODEL, agent, context?.sessionID)
         workers.set(name, gw)
         gw.startMonitor()
         return `+${name} (port ${port})`
@@ -631,7 +625,7 @@ const tools = {
         }
         await Bun.spawn(["rm", "-rf", `/tmp/oc-${port}`]).exited
         const message = e instanceof Error ? e.message : String(e)
-        await pushManagerEvent(`!ev ${name} error create failed: ${message}`)
+        await pushManagerEvent(`!ev ${name} error create failed: ${message}`, context?.sessionID)
         throw e
       } finally {
         if (!startupFailed || !workers.has(name)) {
@@ -833,10 +827,7 @@ export const AgentTeamwork = async ({ client }: any) => {
       await cleanup()
     },
     event: async ({ event }: any) => {
-      const sid = event?.properties?.sessionID
-        || event?.properties?.info?.sessionID
-        || event?.properties?.info?.id
-      if (sid && typeof sid === "string" && sid.startsWith("ses_")) _lastSessionID = sid
+      // No longer needed: worker events route via managerSid stored in WorkerGateway
     },
     tool: tools,
   }
