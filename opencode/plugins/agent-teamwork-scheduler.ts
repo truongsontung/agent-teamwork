@@ -288,8 +288,10 @@ function repeatLabel(ev: CalEvent): string {
 }
 function nextOccurrence(ev: CalEvent, now: number): number {
   if (ev.repeat === "interval") {
+    // Căn theo now (không phải ev.nextAt) để khi tick trễ > 1 chu kỳ sẽ
+    // co giãn đúng số kỳ bị bỏ, thay vì nhảy chu kỳ và bỏ lỡ cửa sổ OVERDUE.
     const step = ev.intervalMs || 60000
-    let n = ev.nextAt + step
+    let n = now + step
     while (n <= now) n += step
     return n
   }
@@ -315,8 +317,13 @@ function startClock() {
 }
 function scheduleNext() {
   clockTimer = setTimeout(async () => {
-    await tick()
-    scheduleNext()
+    try {
+      await tick()
+    } finally {
+      // Luôn reschedule dù tick lỗi — nếu không, clockTimer hết hạn mà không
+      // được lập lịch lại → scheduler chết vĩnh viễn sau 1 lần tick fail.
+      scheduleNext()
+    }
   }, 60_000)
 }
 function stopClock() {
