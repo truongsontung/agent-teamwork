@@ -34,6 +34,9 @@
     "url": "https://github.com/truongsontung/agent-teamwork/issues"
   },
   "homepage": "https://github.com/truongsontung/agent-teamwork#readme",
+  "dependencies": {
+    "zod": "4.1.8"
+  },
   "devDependencies": {
     "typescript": "^7.0.2"
   }
